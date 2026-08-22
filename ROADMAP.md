@@ -1,7 +1,7 @@
 # Roadmap - Sistema de Gestion para Tiendas de Celulares
 
-> **Ultima version:** [v2.13.10](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.10)
-> **Descargar:** [TMPOS Setup 2.13.10.exe](https://github.com/tmpos/tmpos-online/releases/download/v2.13.10/TMPOS.Setup.2.13.10.exe)
+> **Ultima version:** [v2.13.11](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.11)
+> **Descargar:** [TMPOS Setup 2.13.11.exe](https://github.com/tmpos/tmpos-online/releases/download/v2.13.11/TMPOS.Setup.2.13.11.exe)
 
 ## Estado actual del proyecto
 
