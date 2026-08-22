@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build output
+panel/frontend/dist/
+
+# Database
+panel/backend/storage/database/*.db
+panel/backend/storage/database/*.db-*
+
+# Logs
+panel/backend/storage/logs/*.log
+
+# Environment
+.env
+.env.local
+
+# Projects (contain sensitive data)
+projects/*/
+backups/*/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.cache

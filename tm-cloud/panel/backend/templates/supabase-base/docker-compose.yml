@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: supabase/postgres:15.1.1.78
+    container_name: {{PROJECT_SLUG}}_postgres
+    restart: unless-stopped
+    ports:
+      - "{{POSTGRES_PORT}}:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - ./volumes/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Supabase Studio
+  studio:
+    image: supabase/studio:20240729-ce42139
+    container_name: {{PROJECT_SLUG}}_studio
+    restart: unless-stopped
+    ports:
+      - "{{STUDIO_PORT}}:3000"
+    environment:
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      - db
+
+  # Kong API Gateway
+  kong:
+    image: kong:2.8.1
+    container_name: {{PROJECT_SLUG}}_kong
+    restart: unless-stopped
+    ports:
+      - "{{KONG_PORT}}:8000"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+    volumes:
+      - ./volumes/kong:/var/lib/kong
+
+  # GoTrue (Auth)
+  auth:
+    image: supabase/gotrue:v2.151.0
+    container_name: {{PROJECT_SLUG}}_auth
+    restart: unless-stopped
+    ports:
+      - "{{AUTH_PORT}}:9999"
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: https://{{DOMAIN}}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      GOTRUE_SITE_URL: https://{{DOMAIN}}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+    depends_on:
+      - db
+
+  # Realtime
+  realtime:
+    image: supabase/realtime:v2.27.5
+    container_name: {{PROJECT_SLUG}}_realtime
+    restart: unless-stopped
+    ports:
+      - "{{REALTIME_PORT}}:4000"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: postgres
+      SECRET_KEY_BASE: ${JWT_SECRET}
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      - db
+
+  # Storage
+  storage:
+    image: supabase/storage-api:v0.46.4
+    container_name: {{PROJECT_SLUG}}_storage
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+    volumes:
+      - ./volumes/storage:/var/lib/storage
+    depends_on:
+      - db
+
+  # PostgREST
+  rest:
+    image: postgrest/postgrest:v12.0.2
+    container_name: {{PROJECT_SLUG}}_rest
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public,storage
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    depends_on:
+      - db
+
+networks:
+  default:
+    name: {{PROJECT_SLUG}}_network

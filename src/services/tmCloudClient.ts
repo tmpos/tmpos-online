@@ -1,0 +1,382 @@
+export interface TMCloudConfig {
+  url: string
+  key: string
+  serviceKey: string
+}
+
+let currentConfig: TMCloudConfig | null = null
+
+function normalizeUrl(url: string): string {
+  const value = url.trim().replace(/\/+$/, '')
+  const match = value.match(/^(https?:\/\/.+?\/api\/prj_[A-Za-z0-9]+)/i)
+  return match ? match[1] : value
+}
+
+function authHeaders(key: string, json = false): Record<string, string> {
+  return {
+    Authorization: `Bearer ${key}`,
+    ...(json ? { 'Content-Type': 'application/json' } : {}),
+  }
+}
+
+async function responseError(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null)
+  return body?.error || body?.message || `HTTP ${res.status}: ${res.statusText}`
+}
+
+export async function loadConfig(): Promise<TMCloudConfig> {
+  try {
+    if ((window as any).electron?.invoke) {
+      const res = await (window as any).electron.invoke('tmcloud:getConfig')
+      if (res.success && res.data) {
+        return {
+          url: res.data.url || '',
+          key: res.data.public_key || '',
+          serviceKey: res.data.secret_key || '',
+        }
+      }
+    }
+  } catch (_e) { /* TM Cloud config not available yet. */ }
+  return { url: '', key: '', serviceKey: '' }
+}
+
+async function loadRuntimeConfig(): Promise<TMCloudConfig> {
+  try {
+    if ((window as any).electron?.invoke) {
+      const res = await (window as any).electron.invoke('tmcloud:getRuntimeConfig')
+      if (res?.success && res?.data) {
+        return {
+          url: res.data.url || '',
+          key: res.data.public_key || '',
+          serviceKey: res.data.secret_key || '',
+        }
+      }
+    }
+  } catch (_e) { /* Usa el mecanismo normal en web/capacitor. */ }
+  return loadConfig()
+}
+
+export function resetConfig() {
+  currentConfig = null
+}
+
+export async function ensureConfigLoaded(force = false): Promise<TMCloudConfig | null> {
+  if (!force && currentConfig?.url && (currentConfig.key || currentConfig.serviceKey)) return currentConfig
+  const cfg = await loadRuntimeConfig()
+  if (!cfg.url || (!cfg.key && !cfg.serviceKey)) return null
+  currentConfig = {
+    url: normalizeUrl(cfg.url),
+    key: cfg.key.trim(),
+    serviceKey: cfg.serviceKey.trim(),
+  }
+  return currentConfig
+}
+
+export async function saveConfig(url: string, key: string, serviceKey: string) {
+  if (!(window as any).electron?.invoke) throw new Error('Electron no disponible')
+  const normalized = normalizeUrl(url)
+  const res = await (window as any).electron.invoke('tmcloud:saveConfig', {
+    url: normalized,
+    public_key: key.trim(),
+    secret_key: serviceKey.trim(),
+  })
+  if (!res.success) throw new Error(res.error || 'No se pudo guardar configuracion de TM Cloud')
+  const savedConfig = {
+    url: res.data?.url || normalized,
+    key: res.data?.public_key || key.trim(),
+    serviceKey: res.data?.secret_key || serviceKey.trim(),
+  }
+  currentConfig = await loadRuntimeConfig()
+  return savedConfig
+}
+
+export function init(config: { url: string; key: string; serviceKey?: string }) {
+  const url = normalizeUrl(config.url)
+  const key = config.key.trim()
+  const serviceKey = (config.serviceKey || '').trim()
+  if (!url || !key) throw new Error('URL del proyecto y Public Key requeridos')
+  if (!/^https?:\/\//i.test(url)) throw new Error('La URL debe comenzar con http:// o https://')
+  if (!/\/api\/prj_[A-Za-z0-9]+$/i.test(url)) {
+    throw new Error('Usa la URL base del proyecto: https://dominio.com/api/prj_xxx')
+  }
+  currentConfig = { url, key, serviceKey }
+}
+
+export function getConfig() {
+  return currentConfig
+}
+
+export function isConnected() {
+  return currentConfig !== null
+}
+
+export function getRealtimeUrl(table?: string, event?: 'INSERT' | 'UPDATE' | 'DELETE'): string | null {
+  if (!currentConfig?.url || !currentConfig.key) return null
+  const params = new URLSearchParams({ apikey: currentConfig.key })
+  if (table) params.set('table', table)
+  if (event) params.set('event', event)
+  return `${currentConfig.url}/realtime?${params.toString()}`
+}
+
+export function subscribeRealtime(
+  onChange: (payload: any) => void,
+  onError?: (error: Event) => void,
+  table?: string,
+) {
+  const url = getRealtimeUrl(table)
+  if (!url) throw new Error('TM Cloud no configurado')
+  const source = new EventSource(url)
+  source.addEventListener('postgres_changes', (event) => {
+    try {
+      onChange(JSON.parse((event as MessageEvent).data))
+    } catch {
+      // Ignore malformed realtime payloads and keep the stream alive.
+    }
+  })
+  source.onerror = (event) => onError?.(event)
+  return () => source.close()
+}
+
+export async function testConnection(url: string, key: string) {
+  const base = normalizeUrl(url)
+  // Electron y los clientes de red ocultan las llaves reales detras del
+  // proxy local. Esa URL es una configuracion de runtime valida aunque no
+  // termine directamente en /api/prj_xxx.
+  const isRuntimeProxy = /\/tmcloud-proxy$/i.test(base)
+  if (!isRuntimeProxy && !/\/api\/prj_[A-Za-z0-9]+$/i.test(base)) {
+    throw new Error('URL invalida. Usa https://tu-dominio.com/api/prj_xxx')
+  }
+  const publicKey = key.trim()
+  if (!publicKey) throw new Error('La Public Key es obligatoria')
+
+  // Electron debe hacer esta comprobacion desde el proceso principal. Un fetch
+  // directo desde el renderer es bloqueado por CORS y solo muestra "Failed to fetch".
+  if (!isRuntimeProxy && /Electron/i.test(navigator.userAgent) && (window as any).electron?.invoke) {
+    const result = await (window as any).electron.invoke('tmcloud:testConnection', {
+      url: base,
+      public_key: publicKey,
+    })
+    if (!result?.success) throw new Error(result?.error || 'No se pudo conectar con TM Cloud')
+    return result.data
+  }
+
+  const res = await fetch(`${base}/health`, { headers: authHeaders(publicKey) })
+  if (!res.ok) {
+    const message = await responseError(res)
+    if (res.status === 404 && /route not found/i.test(message)) {
+      throw new Error('TMPBase no tiene disponible /health. Sube al servidor la version actualizada de app/Controllers/ApiController.php')
+    }
+    throw new Error(message)
+  }
+  const data = await res.json()
+  if (data.status !== 'ok') throw new Error('Respuesta inesperada de TMPBase')
+  return data.data
+}
+
+function getCloudApi(): { url: string; key: string } | null {
+  return currentConfig ? { url: currentConfig.url, key: currentConfig.key } : null
+}
+
+function getCloudWriteApi(): { url: string; key: string } | null {
+  if (!currentConfig) return null
+  const key = currentConfig.serviceKey || currentConfig.key
+  return { url: currentConfig.url, key }
+}
+
+export async function verifyTable(tabla: string) {
+  const api = getCloudApi()
+  if (!api) return false
+  try {
+    const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}?limit=1`, {
+      headers: authHeaders(api.key),
+    })
+    return res.ok
+  } catch (_e) { return false }
+}
+
+export async function syncTableUpload(tabla: string, localData: any[]) {
+  const api = getCloudWriteApi()
+  if (!api || localData.length === 0) return { success: true, synced: 0 }
+  const rows = localData.map(row => cleanRecord(row))
+  const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}/upsert`, {
+    method: 'POST',
+    headers: authHeaders(api.key, true),
+    body: JSON.stringify({ rows }),
+  })
+  if (!res.ok) throw new Error(await responseError(res))
+  const json = await res.json()
+  const result = json.data || {}
+  return { success: true, synced: (result.inserted || 0) + (result.updated || 0) }
+}
+
+export async function fetchTable(tabla: string, updatedSince?: string): Promise<any[]> {
+  const api = getCloudApi()
+  if (!api) return []
+  const path = updatedSince
+    ? `${api.url}/${encodeURIComponent(tabla)}/sync?from=${encodeURIComponent(updatedSince)}`
+    : `${api.url}/${encodeURIComponent(tabla)}?limit=100`
+  const res = await fetch(path, { headers: authHeaders(api.key) })
+  if (!res.ok) throw new Error(await responseError(res))
+  const json = await res.json()
+  return json.data || []
+}
+
+export async function cacheCompanyLocally(): Promise<number> {
+  const rows = await fetchTable('empresa')
+  if (rows.length === 0) throw new Error('TM Cloud no contiene los datos de la empresa')
+  const normalized = rows.map(row => Object.fromEntries(
+    Object.entries(row).filter(([key]) => key !== 'id').map(([key, value]) => [
+      key,
+      value !== null && typeof value === 'object' ? JSON.stringify(value) : value,
+    ]),
+  ))
+  const sample = Object.assign({}, ...normalized)
+  const schema = await (window as any).electron.invoke('empresa-local:ensureColumns', sample)
+  if (!schema?.success) throw new Error(schema?.error || 'No se pudo actualizar la estructura local de empresa')
+  const clear = await (window as any).electron.invoke('db:clearEmpresaOnly')
+  if (!clear?.success) throw new Error(clear?.error || 'No se pudo preparar la empresa local')
+  for (const empresa of normalized) {
+    const saved = await (window as any).db.insert('empresa', empresa)
+    if (!saved?.success) throw new Error(saved?.error || 'No se pudo guardar la empresa localmente')
+  }
+  return normalized.length
+}
+
+export async function insertRecord(tabla: string, data: any) {
+  const api = getCloudWriteApi()
+  if (!api) return null
+  const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}`, {
+    method: 'POST',
+    headers: authHeaders(api.key, true),
+    body: JSON.stringify(cleanRecord(data)),
+  })
+  if (!res.ok) throw new Error(await responseError(res))
+  const json = await res.json()
+  return json.data || null
+}
+
+export async function updateRecord(tabla: string, uid: string | number, data: any) {
+  const api = getCloudWriteApi()
+  if (!api) return false
+  const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}/${encodeURIComponent(String(uid))}`, {
+    method: 'PUT',
+    headers: authHeaders(api.key, true),
+    body: JSON.stringify(cleanRecord(data, true)),
+  })
+  if (!res.ok) throw new Error(await responseError(res))
+  return true
+}
+
+export async function deleteRecord(tabla: string, uid: string | number) {
+  const api = getCloudWriteApi()
+  if (!api) return false
+  const res = await fetch(`${api.url}/${encodeURIComponent(tabla)}/${encodeURIComponent(String(uid))}`, {
+    method: 'DELETE',
+    headers: authHeaders(api.key),
+  })
+  if (!res.ok && res.status !== 404) throw new Error(await responseError(res))
+  return true
+}
+
+export function cleanRecord(data: any, updating = false): any {
+  const record = { ...data }
+  delete record.id
+  delete record._rowId
+  // almacen_id is an autoincrement identifier that is only meaningful in the
+  // local SQLite database. TM Cloud relates warehouses through almacen_uid.
+  delete record.almacen_id
+  if (updating) {
+    delete record.uid
+    delete record.created_at
+  }
+  return record
+}
+
+function getStorageUrl(): string | null {
+  if (!currentConfig?.url) return null
+  const apiUrl = currentConfig.url.replace(/\/+$/, '')
+  return apiUrl + '/storage'
+}
+
+function getStorageWriteKey(): { key: string; type: 'secret' | 'public' } | null {
+  if (currentConfig?.serviceKey) return { key: currentConfig.serviceKey, type: 'secret' }
+  if (currentConfig?.key) return { key: currentConfig.key, type: 'public' }
+  return null
+}
+
+export async function uploadImage(file: File, directory: string): Promise<string> {
+  await ensureConfigLoaded()
+  const storageUrl = getStorageUrl()
+  const auth = getStorageWriteKey()
+  if (!storageUrl || !auth) throw new Error('TM Cloud no configurado')
+
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('directory', directory)
+
+  const res = await fetch(`${storageUrl}/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${auth.key}` },
+    body: formData,
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(
+      `HTTP ${res.status} (key: ${auth.type})` +
+      (text ? `: ${text.slice(0, 300)}` : '')
+    )
+  }
+  const json = await res.json()
+  const uid = json.data?.uid || json.data?.id || json.file?.uid || json.uid || json.id || json.data?.url || json.url || ''
+  if (!uid) throw new Error('TM Cloud no devolvio el identificador de la imagen')
+  return uid
+}
+
+export function getImageUrl(uid: string): string | null {
+  if (!uid) return null
+  if (/^(data:|https?:\/\/|blob:)/i.test(uid)) return uid
+  const systemProjectApi = String((window as any).__systemProjectApiBase || '').replace(/\/+$/, '')
+  if (systemProjectApi && /^fil_[A-Za-z0-9]+$/i.test(uid)) return `${systemProjectApi}/storage/${encodeURIComponent(uid)}`
+  const storageUrl = getStorageUrl()
+  if (!storageUrl) return null
+  return `${storageUrl}/${uid}`
+}
+
+export async function deleteImage(uid: string): Promise<boolean> {
+  await ensureConfigLoaded()
+  const storageUrl = getStorageUrl()
+  const key = getStorageWriteKey()
+  if (!storageUrl || !key || !uid) return false
+  if (/^(data:|blob:)/i.test(uid)) return false
+  const res = await fetch(`${storageUrl}/${uid}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  return res.ok
+}
+
+export function dataUrlToFile(dataUrl: string, fileName: string): File {
+  const [header, data] = dataUrl.split(',')
+  const mime = header.match(/data:([^;]+)/)?.[1] || 'image/jpeg'
+  const binary = atob(data || '')
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new File([bytes], fileName, { type: mime })
+}
+
+export async function uploadImageSource(source: File | string, directory: string, fileName = 'imagen.jpg'): Promise<string> {
+  if (source instanceof File) return uploadImage(source, directory)
+  if (/^(https?:\/\/|fil_)/i.test(source)) return source
+  if (/^data:/i.test(source)) return uploadImage(dataUrlToFile(source, fileName), directory)
+  throw new Error('Formato de imagen no soportado')
+}
+
+export async function uploadImageSources(sources: string[], directory: string, prefix = 'imagen'): Promise<string[]> {
+  const uploaded: string[] = []
+  for (let i = 0; i < sources.length; i++) {
+    uploaded.push(await uploadImageSource(sources[i], directory, `${prefix}-${i + 1}.jpg`))
+  }
+  return uploaded
+}
+
+export { authHeaders, getCloudApi, getCloudWriteApi, responseError, getStorageUrl, getStorageWriteKey }

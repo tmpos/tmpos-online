@@ -1,0 +1,42 @@
+{
+  "appId": "com.tmpos.app",
+  "productName": "TMPOS",
+  "directories": {
+    "output": "dist-electron"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/main.js",
+    "dist-electron/preload.js"
+  ],
+  "extraResources": [
+    {
+      "from": "build/tmpos-windows.ico",
+      "to": "tmpos-windows.ico"
+    }
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "build/tmpos-valid.ico",
+    "artifactName": "${productName}.Setup.${version}.${ext}"
+  },
+  "mac": {
+    "target": [
+      "dmg",
+      "zip"
+    ],
+    "icon": "build/icon.icns",
+    "category": "public.app-category.business",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "runAfterFinish": true
+  }
+}

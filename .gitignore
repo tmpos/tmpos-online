@@ -1,0 +1,29 @@
+node_modules/
+dist/
+dist-electron/
+.DS_Store
+*.log
+*.bak
+.env
+.env.local
+nul
+
+# Local Codex/OpenAI workspace state
+.openai/
+
+# Local diagnostics and screenshots
+logcat.txt
+screen*.png
+elo-*.png
+
+# Capacitor/Android generated output (keep the Android project source tracked)
+android/.gradle/
+android/.idea/
+android/app/build/
+android/build/
+android/local.properties
+*.apk
+*.aab
+
+# Separate portal repository
+web-portal/
