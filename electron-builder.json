@@ -11,13 +11,13 @@
   ],
   "extraResources": [
     {
-      "from": "build/tmpos-windows.ico",
+      "from": "build/icon.ico",
       "to": "tmpos-windows.ico"
     }
   ],
   "win": {
     "target": "nsis",
-    "icon": "build/tmpos-valid.ico",
+    "icon": "build/icon.ico",
     "artifactName": "${productName}.Setup.${version}.${ext}"
   },
   "mac": {

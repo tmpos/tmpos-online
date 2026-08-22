@@ -1,6 +1,6 @@
 {
   "name": "TMPOS",
-  "version": "2.13.11",
+  "version": "2.13.12",
   "description": "TMPOS Desktop App",
   "repository": {
     "type": "git",
@@ -8,6 +8,7 @@
   },
   "main": "dist-electron/main.js",
   "scripts": {
+    "icons": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/generate-icons.ps1",
     "dev": "vite",
     "build": "vite build",
     "electron:dev": "vite --mode electron",
