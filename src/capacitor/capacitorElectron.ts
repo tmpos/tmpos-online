@@ -390,7 +390,8 @@ export async function handleElectronInvoke(channel: string, ...args: any[]): Pro
         }
         let response: Response | null = null
         let responseData: any = {}
-        for (let attempt = 0; attempt < 2; attempt++) {
+        const maxAttempts = 4
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
           response = await fetch(`${baseUrl}/mail/send`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -399,8 +400,9 @@ export async function handleElectronInvoke(channel: string, ...args: any[]): Pro
           responseData = await response.json().catch(() => ({}))
           if (response.ok) break
           const message = String(responseData?.error?.message || responseData?.error || responseData?.message || '')
-          if (attempt === 0 && /table\s+not\s+found|tabla.+no\s+(?:existe|encontr)/i.test(message)) {
-            await new Promise(resolve => setTimeout(resolve, 350))
+          const transient = /table\s+not\s+found|tabla.+no\s+(?:existe|encontr)|database\s+is\s+locked|sqlstate\[hy000\].*(?:error:\s*5|database\s+is\s+locked)|sqlite_busy/i.test(message)
+          if (attempt < maxAttempts - 1 && transient) {
+            await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
             continue
           }
           break

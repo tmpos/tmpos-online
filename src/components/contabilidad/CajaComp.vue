@@ -1013,7 +1013,7 @@ async function guardarApertura() {
   abriendoTurno.value = true
   try {
     const user = localStorage.getItem('mr_user_usuario') || ''
-    await window.db.insert('caja_turnos', {
+    const resultado = await window.db.insert('caja_turnos', {
       monto_inicial: montoInicial.value || 0,
       entradas: 0, retiros: 0, estado: 'abierto',
       observacion: observacionApertura.value || '',
@@ -1022,10 +1022,12 @@ async function guardarApertura() {
       almacen_id: almacenStore.activeId || 0,
       almacen_uid: almacenStore.activeUid || '',
     })
+    if (!resultado.success) throw new Error(resultado.error || 'No se pudo abrir el turno')
     abrirTurnoModal.value = false
     await cargarDatos()
   } catch (e) {
     console.error('Error abriendo turno:', e)
+    alert(`No se pudo abrir el turno: ${e?.message || 'Error desconocido'}`)
   } finally {
     abriendoTurno.value = false
   }

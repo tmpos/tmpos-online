@@ -23,6 +23,7 @@ import ToggleSwitch from 'primevue/toggleswitch'
 import Tooltip from 'primevue/tooltip'
 import Chip from 'primevue/chip'
 import Tag from 'primevue/tag'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import TicketTallerPrint from './TicketTallerPrint.vue'
@@ -32,11 +33,15 @@ import JsBarcode from 'jsbarcode'
 import { getImageUrl } from '@/services/tmCloudClient'
 import { useEmpresa } from '@/composables/useEmpresa'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import { useAuthStore } from '@/stores/auth.store'
+import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 
 const toast = useToast()
 const route = useRoute()
+const auth = useAuthStore()
+const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
 const { nombre: nombreEmpresa, cargar: cargarEmpresa } = useEmpresa()
 const { addAlmacenId, filterByAlmacen, store: almacenStore } = useAlmacenFilter()
 
@@ -65,6 +70,7 @@ const dialogPiezaCard = ref(false)
 const piezaOrdenActual = ref<any>(null)
 const piezasLista = ref<any[]>([])
 const buscarPiezaCard = ref('')
+const seleccionandoPiezaCard = ref(false)
 
 const dialogAbonoCard = ref(false)
 const abonoOrdenActual = ref<any>(null)
@@ -91,6 +97,29 @@ const nuevoTecnicoForm = ref({ nombre: '', telefono: '', email: '', porcentaje: 
 const nuevoTecnicoPorcentaje = ref(0)
 const guardando = ref(false)
 const dialogTotales = ref(false)
+const menuAccionesOrden = ref()
+const ordenAccionMenu = ref<any>(null)
+const dialogPrecioTecnico = ref(false)
+const precioTecnico = ref(0)
+const tecnicoPrecio = ref('')
+const guardandoPrecioTecnico = ref(false)
+const dialogPagarTecnico = ref(false)
+const ordenPagoTecnico = ref<any>(null)
+const pagandoTecnico = ref(false)
+const dialogPagarTecnicosMultiple = ref(false)
+const pagandoTecnicosMultiple = ref(false)
+
+const ordenesTecnicosPendientesSeleccionadas = computed(() => selectedOrdenes.value.filter((orden: any) =>
+  String(orden.estado_pago_tecnico || '').toUpperCase() !== 'PAGADO' &&
+  String(orden.tecnico || '').trim() &&
+  Number(orden.beneficio_tecnico || 0) > 0
+))
+const ordenesTecnicosInvalidasSeleccionadas = computed(() => selectedOrdenes.value.filter((orden: any) =>
+  String(orden.estado_pago_tecnico || '').toUpperCase() !== 'PAGADO' &&
+  (!String(orden.tecnico || '').trim() || Number(orden.beneficio_tecnico || 0) <= 0)
+))
+const totalPagoTecnicosSeleccionados = computed(() => ordenesTecnicosPendientesSeleccionadas.value
+  .reduce((total: number, orden: any) => total + Number(orden.beneficio_tecnico || 0), 0))
 const formaTotales = ref({ precio_pieza: 0, mano_obra: 0, total: 0 })
 const ordenParaTotales = ref<any>(null)
 const dialogEntregar = ref(false)
@@ -211,7 +240,7 @@ const camposArray = [
   'accesorios', 'fallas', 'piezas',
   'tecnico', 'metodo_pago', 'fecha_entrada', 'fecha_entrega', 'estado',
   'precio_pieza', 'mano_obra', 'abono', 'pendiente', 'total', 'pagos',
-  'beneficio_empresa', 'beneficio_tecnico', 'porcentaje_tecnico', 'estado_pago_tecnico',
+  'beneficio_empresa', 'beneficio_tecnico', 'porcentaje_tecnico', 'estado_pago_tecnico', 'fecha_pago_tecnico',
 ]
 
 // ─── Config ───
@@ -466,40 +495,72 @@ async function abrirPiezaModal(orden: any) {
 
 async function seleccionarPiezaCard(pieza: any) {
   const orden = piezaOrdenActual.value
-  if (!orden) return
-  const disponibles = Number(pieza.cantidad || 0) - Number(pieza.reservada || 0)
+  if (!orden || seleccionandoPiezaCard.value) return
+  let reservadasReales = 0
+  try {
+    const resReservas = await window.db.getWhere('reservas_piezas', 'pieza_id = ? AND estado = ?', [pieza.id, 'RESERVADA'])
+    if (resReservas.success) {
+      reservadasReales = (resReservas.data || []).reduce((total: number, reserva: any) => total + Number(reserva.cantidad || 1), 0)
+      if (Number(pieza.reservada || 0) !== reservadasReales) {
+        await window.db.update('piezas', pieza.id, { reservada: reservadasReales })
+        pieza.reservada = reservadasReales
+      }
+    } else {
+      reservadasReales = Number(pieza.reservada || 0)
+    }
+  } catch {
+    reservadasReales = Number(pieza.reservada || 0)
+  }
+  const disponibles = Number(pieza.cantidad || 0)
   if (disponibles <= 0) {
-    toast.add({ severity: 'warn', summary: 'Sin disponibilidad', detail: 'Todas las unidades de esta pieza están reservadas.', life: 3000 })
+    toast.add({ severity: 'warn', summary: 'Sin existencia', detail: 'Esta pieza no tiene unidades disponibles en inventario.', life: 3000 })
     return
   }
-  const texto = pieza.nombre || ''
-  const nuevasPiezas = orden.piezas ? orden.piezas + '\n' + texto : texto
-  const valorPieza = Number(pieza.precio_venta) || 0
-  const nuevoPrecioPieza = (Number(orden.precio_pieza) || 0) + valorPieza
-  const nuevoTotal = nuevoPrecioPieza + (Number(orden.mano_obra) || 0)
-  const nuevoPendiente = nuevoTotal - (Number(orden.abono) || 0)
-  await window.db.update('ordenes_taller', orden.id, {
-    piezas: nuevasPiezas,
-    precio_pieza: nuevoPrecioPieza,
-    total: nuevoTotal,
-    pendiente: nuevoPendiente,
-  })
-  await window.db.update('piezas', pieza.id, { reservada: Number(pieza.reservada || 0) + 1 })
-  await window.db.insert('reservas_piezas', addAlmacenId({
-    orden_id: orden.id,
-    pieza_id: pieza.id,
-    pieza_nombre: texto,
-    cantidad: 1,
-    estado: 'RESERVADA',
-    usuario: auth.user?.nombre || auth.user?.usuario || '',
-  }))
-  orden.piezas = nuevasPiezas
-  orden.precio_pieza = nuevoPrecioPieza
-  orden.total = nuevoTotal
-  orden.pendiente = nuevoPendiente
-  dialogPiezaCard.value = false
-  piezaSeleccionadaInfo.value = { orden, texto, valor: valorPieza, piezaId: pieza.id, cantidad: pieza.cantidad || 0 }
-  dialogFacturaPieza.value = true
+  seleccionandoPiezaCard.value = true
+  try {
+    const texto = pieza.nombre || ''
+    const nuevasPiezas = orden.piezas ? orden.piezas + '\n' + texto : texto
+    const valorPieza = Number(pieza.precio_venta) || 0
+    const nuevoPrecioPieza = (Number(orden.precio_pieza) || 0) + valorPieza
+    const nuevoTotal = nuevoPrecioPieza + (Number(orden.mano_obra) || 0)
+    const nuevoPendiente = nuevoTotal - (Number(orden.abono) || 0)
+    const resOrden = await window.db.update('ordenes_taller', orden.id, {
+      piezas: nuevasPiezas,
+      precio_pieza: nuevoPrecioPieza,
+      total: nuevoTotal,
+      pendiente: nuevoPendiente,
+    })
+    if (!resOrden.success) throw new Error(resOrden.error || 'No se pudo actualizar la orden')
+    const resPieza = await window.db.update('piezas', pieza.id, { reservada: reservadasReales + 1 })
+    if (!resPieza.success) throw new Error(resPieza.error || 'No se pudo reservar la pieza')
+    const resReserva = await window.db.insert('reservas_piezas', {
+      orden_id: orden.id,
+      pieza_id: pieza.id,
+      pieza_nombre: texto,
+      cantidad: 1,
+      estado: 'RESERVADA',
+      usuario: auth.user?.nombre || auth.user?.usuario || '',
+    })
+    if (!resReserva.success) throw new Error(resReserva.error || 'No se pudo registrar la reserva')
+    orden.piezas = nuevasPiezas
+    orden.precio_pieza = nuevoPrecioPieza
+    orden.total = nuevoTotal
+    orden.pendiente = nuevoPendiente
+    dialogPiezaCard.value = false
+    piezaSeleccionadaInfo.value = {
+      orden,
+      texto,
+      valor: valorPieza,
+      costo: Number(pieza.costo || 0),
+      piezaId: pieza.id,
+      cantidad: pieza.cantidad || 0,
+    }
+    dialogFacturaPieza.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'No se pudo agregar la pieza', detail: error?.message || 'Ocurrió un error al seleccionar la pieza.', life: 4000 })
+  } finally {
+    seleccionandoPiezaCard.value = false
+  }
 }
 
 async function crearFacturaPieza() {
@@ -507,7 +568,8 @@ async function crearFacturaPieza() {
   const info = piezaSeleccionadaInfo.value
   if (!info) return
   creandoFactura.value = true
-  const { orden, texto, valor, piezaId, cantidad } = info
+  const { orden, texto, valor, costo, piezaId, cantidad } = info
+  const costoPieza = Number(costo || 0)
   const fecha = new Date().toISOString().split('T')[0]
   const ahora = new Date()
   const hora = ahora.toTimeString().split(' ')[0].slice(0, 5)
@@ -515,16 +577,18 @@ async function crearFacturaPieza() {
     no_factura: `F-${Date.now().toString(36).toUpperCase()}`,
     nombre_cliente: orden.nombre || '',
     telefono_cliente: orden.telefono || '',
-    productos: JSON.stringify([{ nombre: texto, cantidad: 1, precio: valor, costo: 0 }]),
+    productos: JSON.stringify([{ nombre: texto, cantidad: 1, precio: valor, precio_venta: valor, costo: costoPieza }]),
     total: valor,
     subtotal: valor,
     descuento: 0,
-    ganancia: valor,
+    costo: costoPieza,
+    ganancia: Math.round((Number(valor || 0) - costoPieza) * 100) / 100,
     metodo_pago: 'EFECTIVO',
     fecha_emision: fecha,
     hora,
     estado_factura: 'PENDIENTE',
     vendedor: '',
+    referencia_origen: `TALLER_PIEZA:${orden.id}`,
   }
   const res = await window.db.insert('facturas', addAlmacenId(factura))
   if (res.success) {
@@ -569,6 +633,137 @@ function imprimirOrden(orden: any) {
   ticketTallerRef.value?.printTicket(orden)
 }
 
+function abrirMenuAccionesOrden(event: Event, orden: any) {
+  ordenAccionMenu.value = orden
+  menuAccionesOrden.value?.toggle(event)
+}
+
+const opcionesMenuOrden = computed(() => [
+  { label: 'Imprimir', icon: 'pi pi-print', command: () => imprimirOrden(ordenAccionMenu.value) },
+  { label: 'Etiqueta', icon: 'pi pi-qrcode', command: () => abrirEtiquetaTaller(ordenAccionMenu.value) },
+  { label: 'Precio técnico', icon: 'pi pi-dollar', command: () => abrirPrecioTecnico(ordenAccionMenu.value) },
+  {
+    label: String(ordenAccionMenu.value?.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? 'Técnico pagado' : 'Pagar técnico',
+    icon: 'pi pi-money-bill',
+    disabled: String(ordenAccionMenu.value?.estado_pago_tecnico || '').toUpperCase() === 'PAGADO',
+    command: () => abrirPagarTecnico(ordenAccionMenu.value),
+  },
+  { label: 'Editar', icon: 'pi pi-pencil', command: () => abrirEditar(ordenAccionMenu.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', command: () => confirmarBorrar(ordenAccionMenu.value) },
+])
+
+function abrirPrecioTecnico(orden: any) {
+  ordenAccionMenu.value = orden
+  precioTecnico.value = Number(orden?.beneficio_tecnico || 0)
+  tecnicoPrecio.value = String(orden?.tecnico || '').trim()
+  dialogPrecioTecnico.value = true
+}
+
+function abrirPagarTecnico(orden: any) {
+  if (!orden) return
+  if (!String(orden.tecnico || '').trim()) {
+    toast.add({ severity: 'warn', summary: 'Técnico requerido', detail: 'Primero asigna el técnico desde Precio técnico.', life: 3000 })
+    return
+  }
+  if (Number(orden.beneficio_tecnico || 0) <= 0) {
+    toast.add({ severity: 'warn', summary: 'Precio técnico requerido', detail: 'Primero indica cuánto cobrará el técnico.', life: 3000 })
+    return
+  }
+  ordenPagoTecnico.value = orden
+  dialogPagarTecnico.value = true
+}
+
+async function confirmarPagoTecnico() {
+  const orden = ordenPagoTecnico.value
+  if (!orden || pagandoTecnico.value) return
+  pagandoTecnico.value = true
+  try {
+    const res = await window.db.update('ordenes_taller', orden.id, {
+      estado_pago_tecnico: 'PAGADO',
+      fecha_pago_tecnico: new Date().toISOString(),
+    })
+    if (!res.success) throw new Error(res.error || 'No se pudo registrar el pago')
+    dialogPagarTecnico.value = false
+    await cargarOrdenes()
+    toast.add({ severity: 'success', summary: 'Técnico pagado', detail: `${orden.tecnico} recibió ${formatCurrency(orden.beneficio_tecnico)}.`, life: 3500 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo pagar al técnico.', life: 3500 })
+  } finally {
+    pagandoTecnico.value = false
+  }
+}
+
+function abrirPagoTecnicosMultiple() {
+  if (ordenesTecnicosInvalidasSeleccionadas.value.length > 0) {
+    toast.add({ severity: 'warn', summary: 'Órdenes incompletas', detail: `${ordenesTecnicosInvalidasSeleccionadas.value.length} orden(es) no tienen técnico o precio técnico configurado.`, life: 4200 })
+    return
+  }
+  if (ordenesTecnicosPendientesSeleccionadas.value.length === 0) {
+    toast.add({ severity: 'info', summary: 'Sin pagos pendientes', detail: 'Los técnicos de las órdenes seleccionadas ya están pagados.', life: 3000 })
+    return
+  }
+  dialogPagarTecnicosMultiple.value = true
+}
+
+async function confirmarPagoTecnicosMultiple() {
+  if (pagandoTecnicosMultiple.value) return
+  pagandoTecnicosMultiple.value = true
+  let pagadas = 0
+  const fechaPago = new Date().toISOString()
+  try {
+    for (const orden of ordenesTecnicosPendientesSeleccionadas.value) {
+      const res = await window.db.update('ordenes_taller', orden.id, {
+        estado_pago_tecnico: 'PAGADO',
+        fecha_pago_tecnico: fechaPago,
+      })
+      if (!res.success) throw new Error(res.error || `No se pudo pagar la orden ${orden.no_orden || orden.id}`)
+      pagadas++
+    }
+    dialogPagarTecnicosMultiple.value = false
+    selectedOrdenes.value = []
+    await cargarOrdenes()
+    toast.add({ severity: 'success', summary: 'Técnicos pagados', detail: `${pagadas} pago(s) fueron registrados correctamente.`, life: 3500 })
+  } catch (error: any) {
+    await cargarOrdenes()
+    toast.add({ severity: 'error', summary: 'Pago incompleto', detail: `${pagadas} pago(s) registrados. ${error?.message || 'Ocurrió un error.'}`, life: 4500 })
+  } finally {
+    pagandoTecnicosMultiple.value = false
+  }
+}
+
+async function guardarPrecioTecnico() {
+  const orden = ordenAccionMenu.value
+  if (!orden || guardandoPrecioTecnico.value) return
+  const monto = Math.max(0, Number(precioTecnico.value || 0))
+  const tecnico = String(tecnicoPrecio.value || '').trim().toUpperCase()
+  if (!tecnico) {
+    toast.add({ severity: 'warn', summary: 'Técnico requerido', detail: 'Selecciona o escribe el nombre del técnico.', life: 2800 })
+    return
+  }
+  guardandoPrecioTecnico.value = true
+  try {
+    const beneficioEmpresa = Math.round((Number(orden.mano_obra || 0) - monto) * 100) / 100
+    const cambiaPago = String(orden.tecnico || '').trim().toUpperCase() !== tecnico || Number(orden.beneficio_tecnico || 0) !== monto
+    const res = await window.db.update('ordenes_taller', orden.id, {
+      tecnico,
+      beneficio_tecnico: monto,
+      beneficio_empresa: beneficioEmpresa,
+      tipo_comision_tecnico: 'MONTO_FIJO',
+      valor_comision_tecnico: monto,
+      ...(cambiaPago ? { estado_pago_tecnico: 'PENDIENTE' } : {}),
+    })
+    if (!res.success) throw new Error(res.error || 'No se pudo guardar el precio técnico')
+    dialogPrecioTecnico.value = false
+    await cargarOrdenes()
+    toast.add({ severity: 'success', summary: 'Precio técnico guardado', detail: `El técnico cobrará ${formatCurrency(monto)} por esta reparación.`, life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo guardar el precio técnico.', life: 3500 })
+  } finally {
+    guardandoPrecioTecnico.value = false
+  }
+}
+
 function abrirTotales(orden: any) {
   ordenParaTotales.value = orden
   formaTotales.value = {
@@ -606,6 +801,27 @@ function abrirEntrega(orden: any) {
   dialogEntregar.value = true
 }
 
+async function facturasPiezasPendientes(ordenId: number): Promise<any[]> {
+  const referencia = `TALLER_PIEZA:${ordenId}`
+  const res = await window.db.getWhere('facturas', 'referencia_origen = ?', [referencia])
+  if (!res.success) throw new Error(res.error || 'No se pudieron verificar las facturas de piezas')
+  return (res.data || []).filter((factura: any) => {
+    const estado = String(factura.estado_factura || factura.estado || '').trim().toUpperCase()
+    return !['PAGADA', 'PAGADO', 'COBRADA', 'COBRADO'].includes(estado)
+  })
+}
+
+async function marcarFacturasPiezasComoPagadas(ordenId: number): Promise<number> {
+  const pendientes = await facturasPiezasPendientes(ordenId)
+  let pagadas = 0
+  for (const factura of pendientes) {
+    const res = await window.db.update('facturas', factura.id, { estado_factura: 'PAGADA' })
+    if (!res.success) throw new Error(res.error || `No se pudo pagar la factura ${factura.no_factura || factura.id}`)
+    pagadas++
+  }
+  return pagadas
+}
+
 async function confirmarEntrega() {
   const orden = ordenParaEntrega.value
   if (!orden) return
@@ -613,13 +829,17 @@ async function confirmarEntrega() {
     const abono = Number(entregaForm.value.abono) || 0
     const nuevoAbono = (orden.abono || 0) + abono
     const nuevoPendiente = Math.max(0, (orden.total || 0) - nuevoAbono)
+    let facturasPiezasPagadas = 0
+    if (nuevoPendiente <= 0) {
+      facturasPiezasPagadas = await marcarFacturasPiezasComoPagadas(Number(orden.id))
+    }
     const nuevoEstado = nuevoPendiente <= 0 ? entregaForm.value.estado : 'PARCIAL'
     await window.db.update('ordenes_taller', orden.id, {
       estado: nuevoEstado,
       abono: nuevoAbono,
       pendiente: nuevoPendiente,
     })
-    toast.add({ severity: 'success', summary: 'Entregada', detail: `Orden #${orden.no_orden} marcada como ${nuevoEstado}`, life: 3000 })
+    toast.add({ severity: 'success', summary: 'Entregada', detail: `Orden #${orden.no_orden} marcada como ${nuevoEstado}${facturasPiezasPagadas ? `; ${facturasPiezasPagadas} factura(s) de piezas pagada(s)` : ''}`, life: 3500 })
     dialogEntregar.value = false
     prepararWhatsappEstado({ ...orden, estado: nuevoEstado, abono: nuevoAbono, pendiente: nuevoPendiente }, orden.estado || '', nuevoEstado)
     await cargarOrdenes()
@@ -1108,6 +1328,7 @@ defineExpose({ cargarOrdenes })
 <template>
   <div>
     <Toast />
+    <Menu ref="menuAccionesOrden" :model="opcionesMenuOrden" popup />
 
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- VISTA LISTA                                                 -->
@@ -1146,6 +1367,14 @@ defineExpose({ cargarOrdenes })
             </div>
             <Button
               v-if="selectedOrdenes.length"
+              :label="`Pagar técnicos (${selectedOrdenes.length})`"
+              icon="pi pi-money-bill"
+              severity="help"
+              outlined
+              @click="abrirPagoTecnicosMultiple"
+            />
+            <Button
+              v-if="selectedOrdenes.length"
               :label="`Cambiar Almacen (${selectedOrdenes.length})`"
               icon="pi pi-warehouse"
               severity="success"
@@ -1178,42 +1407,9 @@ defineExpose({ cargarOrdenes })
           responsiveLayout="scroll"
         >
           <Column selectionMode="multiple" headerStyle="width: 3rem" />
-          <Column header="Acciones" style="width: 12rem">
+          <Column header="Acciones" style="width: 6rem">
             <template #body="{ data }">
-              <div class="flex gap-1">
-                <Button
-                  icon="pi pi-print"
-                  severity="info"
-                  text
-                  rounded
-                  @click.stop="imprimirOrden(data)"
-                  v-tooltip="'Imprimir'"
-                />
-                <Button
-                  icon="pi pi-qrcode"
-                  severity="success"
-                  text
-                  rounded
-                  @click.stop="abrirEtiquetaTaller(data)"
-                  v-tooltip="'Etiqueta'"
-                />
-                <Button
-                  icon="pi pi-pencil"
-                  severity="info"
-                  text
-                  rounded
-                  @click.stop="abrirEditar(data)"
-                  v-tooltip="'Editar'"
-                />
-                <Button
-                  icon="pi pi-trash"
-                  severity="danger"
-                  text
-                  rounded
-                  @click.stop="confirmarBorrar(data)"
-                  v-tooltip="'Eliminar'"
-                />
-              </div>
+              <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded @click.stop="abrirMenuAccionesOrden($event, data)" v-tooltip="'Acciones'" />
             </template>
           </Column>
           <Column field="id" header="#" style="width: 4rem" sortable />
@@ -1352,6 +1548,25 @@ defineExpose({ cargarOrdenes })
                     v-tooltip="'Agregar Abono'"
                   />
                   <Button
+                    icon="pi pi-user-edit"
+                    severity="help"
+                    text
+                    rounded
+                    size="small"
+                    @click.stop="abrirPrecioTecnico(orden)"
+                    v-tooltip="'Precio técnico'"
+                  />
+                  <Button
+                    :icon="String(orden.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? 'pi pi-check-circle' : 'pi pi-money-bill'"
+                    :severity="String(orden.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? 'success' : 'help'"
+                    text
+                    rounded
+                    size="small"
+                    :disabled="String(orden.estado_pago_tecnico || '').toUpperCase() === 'PAGADO'"
+                    @click.stop="abrirPagarTecnico(orden)"
+                    v-tooltip="String(orden.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? 'Técnico pagado' : 'Pagar técnico'"
+                  />
+                  <Button
                     icon="pi pi-whatsapp"
                     severity="success"
                     text
@@ -1455,6 +1670,79 @@ defineExpose({ cargarOrdenes })
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- Dialog Totales                                              -->
     <!-- ════════════════════════════════════════════════════════════ -->
+    <Dialog v-model:visible="dialogPrecioTecnico" header="Precio técnico" modal :style="{ width: 'min(28rem, 95vw)' }" :closable="!guardandoPrecioTecnico">
+      <div v-if="ordenAccionMenu" class="space-y-4 pt-2">
+        <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 text-sm space-y-1">
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Orden</span><strong>{{ ordenAccionMenu.no_orden || ordenAccionMenu.id }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Mano de obra</span><strong>{{ formatCurrency(ordenAccionMenu.mano_obra || 0) }}</strong></div>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-semibold">Técnico</label>
+          <Select
+            v-model="tecnicoPrecio"
+            :options="tecnicos.map(tecnico => tecnico.nombre)"
+            editable
+            filter
+            placeholder="Seleccionar o escribir técnico"
+            fluid
+          />
+          <p class="text-xs text-surface-500">Selecciona un técnico registrado o escribe el nombre directamente.</p>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-semibold">Monto que cobrará el técnico</label>
+          <InputNumber v-model="precioTecnico" mode="currency" :currency="systemCurrency" :locale="systemLocale" :min="0" fluid autofocus @focus="(e: any) => e.target.select()" @keyup.enter="guardarPrecioTecnico" />
+        </div>
+        <p class="text-xs text-surface-500">Este monto se guardará como precio fijo del técnico para esta reparación.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="guardandoPrecioTecnico" @click="dialogPrecioTecnico = false" />
+        <Button label="Guardar" icon="pi pi-check" :loading="guardandoPrecioTecnico" :disabled="!String(tecnicoPrecio || '').trim()" @click="guardarPrecioTecnico" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogPagarTecnico" header="Pagar técnico" modal :style="{ width: 'min(28rem, 95vw)' }" :closable="!pagandoTecnico">
+      <div v-if="ordenPagoTecnico" class="space-y-4 pt-2">
+        <div class="flex items-center gap-3 rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/30 p-4">
+          <i class="pi pi-money-bill text-3xl text-violet-600"></i>
+          <div>
+            <p class="text-sm text-surface-500">Monto a pagar</p>
+            <p class="text-2xl font-bold text-violet-600">{{ formatCurrency(ordenPagoTecnico.beneficio_tecnico || 0) }}</p>
+          </div>
+        </div>
+        <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 text-sm space-y-2">
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Técnico</span><strong>{{ ordenPagoTecnico.tecnico }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Orden</span><strong>{{ ordenPagoTecnico.no_orden || ordenPagoTecnico.id }}</strong></div>
+          <div class="flex justify-between gap-3"><span class="text-surface-500">Cliente</span><strong>{{ ordenPagoTecnico.nombre || '-' }}</strong></div>
+        </div>
+        <p class="text-sm text-surface-500">Al confirmar, este monto aparecerá como pagado a técnicos en el Reporte de Taller.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="pagandoTecnico" @click="dialogPagarTecnico = false" />
+        <Button label="Confirmar pago" icon="pi pi-check" severity="success" :loading="pagandoTecnico" @click="confirmarPagoTecnico" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogPagarTecnicosMultiple" header="Pagar técnicos seleccionados" modal :style="{ width: 'min(34rem, 95vw)' }" :closable="!pagandoTecnicosMultiple">
+      <div class="space-y-4 pt-2">
+        <div class="rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/30 p-4 text-center">
+          <p class="text-sm text-surface-500">Total a pagar</p>
+          <p class="text-3xl font-bold text-violet-600">{{ formatCurrency(totalPagoTecnicosSeleccionados) }}</p>
+          <p class="text-xs text-surface-500 mt-1">{{ ordenesTecnicosPendientesSeleccionadas.length }} técnico(s) / orden(es)</p>
+        </div>
+        <div class="max-h-64 overflow-y-auto divide-y divide-surface-200 dark:divide-surface-700 rounded-lg border border-surface-200 dark:border-surface-700">
+          <div v-for="orden in ordenesTecnicosPendientesSeleccionadas" :key="orden.id" class="flex items-center justify-between gap-3 p-3 text-sm">
+            <div class="min-w-0"><p class="font-semibold truncate">{{ orden.tecnico }}</p><p class="text-xs text-surface-500">Orden {{ orden.no_orden || `#${orden.id}` }}</p></div>
+            <strong class="text-violet-600 shrink-0">{{ formatCurrency(orden.beneficio_tecnico || 0) }}</strong>
+          </div>
+        </div>
+        <p class="text-sm text-surface-500">Todos estos pagos quedarán registrados con la fecha actual y aparecerán en el historial de Técnicos.</p>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="pagandoTecnicosMultiple" @click="dialogPagarTecnicosMultiple = false" />
+        <Button label="Confirmar todos" icon="pi pi-check" severity="success" :loading="pagandoTecnicosMultiple" @click="confirmarPagoTecnicosMultiple" />
+      </template>
+    </Dialog>
+
     <Dialog v-model:visible="dialogTotales" header="Ajustar Totales" modal :style="{ width: 'min(26rem, 95vw)' }">
       <div v-if="ordenParaTotales" class="space-y-4 pt-2">
         <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 space-y-1 text-sm">
@@ -1643,6 +1931,7 @@ defineExpose({ cargarOrdenes })
             v-for="p in piezasFiltradasCard"
             :key="p.id"
             class="flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer hover:bg-surface-100 dark:hover:bg-surface-700 border border-transparent hover:border-surface-200 dark:hover:border-surface-600"
+            :class="seleccionandoPiezaCard ? 'pointer-events-none opacity-60' : ''"
             @click="seleccionarPiezaCard(p)"
           >
             <div>
@@ -1655,6 +1944,7 @@ defineExpose({ cargarOrdenes })
             No se encontraron piezas.
           </div>
         </div>
+        <div v-if="seleccionandoPiezaCard" class="flex items-center justify-center gap-2 text-sm text-primary"><i class="pi pi-spin pi-spinner"></i> Agregando pieza...</div>
       </div>
     </Dialog>
 

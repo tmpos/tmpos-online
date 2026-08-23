@@ -779,7 +779,7 @@ function auditSchema() {
     accesorios: { imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", proveedor_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
-    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
+    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", fecha_pago_tecnico: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     piezas: { reservada: 'INTEGER DEFAULT 0' },
     tecnicos: { tipo_comision: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision: 'REAL DEFAULT 0' },
     gastos: { metodo_pago: "TEXT DEFAULT 'EFECTIVO'", banco_id: 'INTEGER DEFAULT 0', banco_uid: "TEXT DEFAULT ''", banco_nombre: "TEXT DEFAULT ''" },

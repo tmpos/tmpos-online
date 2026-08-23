@@ -22,6 +22,8 @@ const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedMarca = ref<any>(null)
+const selectedMarcas = ref<any[]>([])
+const deletingMultiple = ref(false)
 const busqueda = ref('')
 
 const marcasFiltradas = computed(() => {
@@ -79,8 +81,32 @@ function abrirEditar(marca: any) {
 }
 
 function confirmarBorrar(marca: any) {
+  deletingMultiple.value = false
   selectedMarca.value = marca
   deleteDialogVisible.value = true
+}
+
+function confirmarBorrarMultiple() {
+  if (selectedMarcas.value.length === 0) return
+  deletingMultiple.value = true
+  deleteDialogVisible.value = true
+}
+
+async function borrarMultiple() {
+  const seleccionadas = [...selectedMarcas.value]
+  try {
+    for (const marca of seleccionadas) {
+      const res = await window.db.delete('marcas', marca.id)
+      if (!res.success) throw new Error(res.error || `No se pudo eliminar ${marca.nombre}`)
+    }
+    selectedMarcas.value = []
+    deleteDialogVisible.value = false
+    deletingMultiple.value = false
+    toast.add({ severity: 'success', summary: 'Eliminadas', detail: `${seleccionadas.length} marca(s) eliminadas`, life: 3000 })
+    await cargarMarcas()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudieron eliminar las marcas', life: 4000 })
+  }
 }
 
 async function guardar() {
@@ -184,6 +210,12 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div v-if="viewMode === 'table' && selectedMarcas.length > 0" class="flex flex-wrap items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
+        <span class="text-sm font-medium">{{ selectedMarcas.length }} seleccionada(s)</span>
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
+        <Button icon="pi pi-times" severity="secondary" text rounded size="small" @click="selectedMarcas = []" v-tooltip="'Limpiar selección'" />
+      </div>
+
       <DataTable
         v-if="viewMode === 'table'"
         :value="marcasFiltradas"
@@ -194,7 +226,9 @@ onMounted(async () => {
         :rowsPerPageOptions="[10, 25, 50]"
         dataKey="id"
         responsiveLayout="scroll"
+        v-model:selection="selectedMarcas"
       >
+        <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column field="id" header="ID" style="width: 5rem" />
         <Column field="nombre" header="Nombre" sortable />
         <Column field="descripcion" header="Descripcion" sortable />
@@ -306,11 +340,12 @@ onMounted(async () => {
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar <strong>{{ selectedMarca?.nombre }}</strong>?</span>
+        <span v-if="deletingMultiple">¿Seguro que deseas eliminar las <strong>{{ selectedMarcas.length }}</strong> marcas seleccionadas?</span>
+        <span v-else>¿Seguro que deseas eliminar <strong>{{ selectedMarca?.nombre }}</strong>?</span>
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrar" />
+        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="deletingMultiple ? borrarMultiple() : borrar()" />
       </template>
     </Dialog>
   </div>

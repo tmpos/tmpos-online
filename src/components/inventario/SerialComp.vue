@@ -27,6 +27,9 @@ import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
 import { matchesSearch } from '@/composables/useSearch'
+import ColorSelect from '@/components/shared/ColorSelect.vue'
+import CapacitySelect from '@/components/shared/CapacitySelect.vue'
+import PriceAdjustmentDialog from '@/components/inventario/PriceAdjustmentDialog.vue'
 
 const toast = useToast()
 const router = useRouter()
@@ -39,6 +42,8 @@ const electrodomesticosRaw = ref<any[]>([])
 const clientes = ref<any[]>([])
 const verTodosAlmacenes = ref(false)
 const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
+const dialogAjustarPrecios = ref(false)
+const guardandoAjustePrecios = ref(false)
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
@@ -378,6 +383,30 @@ async function cargarSeriales() {
     console.error(error)
   } finally {
     loading.value = false
+  }
+}
+
+async function aplicarAjustePrecios(cambios: Array<{ id: number; data: Record<string, number> }>) {
+  if (cambios.length === 0) {
+    toast.add({ severity: 'info', summary: 'Sin cambios', detail: 'No hay precios nuevos para guardar.', life: 2200 })
+    return
+  }
+  guardandoAjustePrecios.value = true
+  let actualizados = 0
+  try {
+    for (const cambio of cambios) {
+      const res = await window.db.update('serial', cambio.id, cambio.data)
+      if (!res.success) throw new Error(res.error || 'No se pudo actualizar un serial')
+      actualizados++
+    }
+    dialogAjustarPrecios.value = false
+    await cargarSeriales()
+    toast.add({ severity: 'success', summary: 'Precios actualizados', detail: `${actualizados} serial(es) actualizados.`, life: 3000 })
+  } catch (error: any) {
+    await cargarSeriales()
+    toast.add({ severity: 'error', summary: 'Actualización incompleta', detail: `${actualizados} actualizado(s). ${error?.message || 'Ocurrió un error.'}`, life: 4500 })
+  } finally {
+    guardandoAjustePrecios.value = false
   }
 }
 
@@ -1066,12 +1095,14 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
               <i class="pi pi-th-large"></i>
             </button>
           </div>
+          <Button label="Ajustar precios" icon="pi pi-percentage" severity="secondary" outlined @click="dialogAjustarPrecios = true" />
           <Button label="Nuevo Serial" icon="pi pi-plus" @click="abrirCrear" />
         </div>
       </div>
 
       <div v-if="selectedSeriales.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
         <span class="text-sm font-medium">{{ selectedSeriales.length }} seleccionado(s)</span>
+        <Button label="Ajustar precios" icon="pi pi-percentage" severity="secondary" size="small" @click="dialogAjustarPrecios = true" />
         <Button label="Cambiar Estado" icon="pi pi-refresh" severity="info" size="small" @click="abrirCambiarEstadoMultiple" />
         <Button label="Cambiar Equipo" icon="pi pi-sitemap" severity="warn" size="small" @click="abrirCambiarEquipoMultiple" />
         <Button label="Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirCambiarAlmacenMultiple" />
@@ -1333,11 +1364,11 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
         <div class="grid grid-cols-3 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
-            <InputText v-model="form.color" placeholder="Color" fluid class="uppercase" style="text-transform: uppercase;" />
+            <ColorSelect v-model="form.color" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
-            <InputText v-model="form.capacidad" placeholder="Ej: 128GB" fluid />
+            <CapacitySelect v-model="form.capacidad" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Bateria</label>
@@ -1576,7 +1607,7 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
     >
       <div class="space-y-4 pt-2">
         <p class="text-sm">Asignar nuevo color a <strong>{{ selectedSeriales.length }}</strong> Serial(es):</p>
-        <InputText v-model="nuevoColorMultiple" placeholder="Ej: NEGRO" fluid class="uppercase" style="text-transform: uppercase;" />
+        <ColorSelect v-model="nuevoColorMultiple" />
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioColorMultiple = false" />
@@ -1592,7 +1623,7 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
     >
       <div class="space-y-4 pt-2">
         <p class="text-sm">Asignar nueva capacidad a <strong>{{ selectedSeriales.length }}</strong> Serial(es):</p>
-        <InputText v-model="nuevaCapacidadMultiple" placeholder="Ej: 128GB" fluid class="uppercase" style="text-transform: uppercase;" />
+        <CapacitySelect v-model="nuevaCapacidadMultiple" />
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioCapacidadMultiple = false" />
@@ -1650,6 +1681,18 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
         <Button label="Cancelar" severity="secondary" text @click="dialogSeleccionarPlantilla = false" />
       </template>
     </Dialog>
+
+    <PriceAdjustmentDialog
+      v-model:visible="dialogAjustarPrecios"
+      :items="seriales"
+      :selected-items="selectedSeriales"
+      item-label="serial(es)"
+      :scope-label="verTodosAlmacenes ? 'conjunto de todos los almacenes' : 'almacén activo'"
+      :currency="systemCurrency"
+      :locale="systemLocale"
+      :loading="guardandoAjustePrecios"
+      @apply="aplicarAjustePrecios"
+    />
 
     <TicketFacturaPrint ref="ticketPrintRef" />
 

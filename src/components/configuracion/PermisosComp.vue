@@ -33,6 +33,8 @@ const opcionesPermisosBase = [
   { label: 'Serial', key: 'serial', grupo: 'Inventario' },
   { label: 'Categorias', key: 'categorias', grupo: 'Inventario' },
   { label: 'Marcas', key: 'marcas', grupo: 'Inventario' },
+  { label: 'Colores', key: 'colores', grupo: 'Inventario' },
+  { label: 'Capacidades', key: 'capacidades', grupo: 'Inventario' },
   { label: 'Etiquetas', key: 'etiquetas', grupo: 'Inventario' },
   { label: 'Cambiazo', key: 'cambiazo', grupo: 'Inventario' },
   { label: 'Transferencias', key: 'transferencias', grupo: 'Inventario' },

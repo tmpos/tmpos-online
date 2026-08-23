@@ -7,8 +7,12 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import QRCode from 'qrcode'
 import * as tmc from '@/services/tmCloudClient'
+import { useAlmacenStore } from '@/stores/almacen.store'
+import { useEmpresa } from '@/composables/useEmpresa'
 
 const toast = useToast()
+const almacenStore = useAlmacenStore()
+const empresaState = useEmpresa()
 const loading = ref(true)
 const licVerificando = ref(false)
 const licMsg = ref('')
@@ -72,8 +76,6 @@ async function cambiarLicencia() {
       nuevaLicenciaError.value = val.error || 'No se pudo validar la licencia'
       return
     }
-    // La licencia y las credenciales se mantienen localmente; los datos del
-    // negocio nunca se descargan ni se limpian porque solo se consultan online.
     const refresh = await window.electron.invoke('licencia:fetchConfig', codigo) as any
     if (!refresh.success) {
       nuevaLicenciaError.value = refresh.error || 'No se pudo preparar TM Cloud'
@@ -90,10 +92,31 @@ async function cambiarLicencia() {
     const config = await tmc.ensureConfigLoaded(true)
     if (!config) throw new Error('La licencia no devolvio una configuracion valida de TM Cloud')
     await tmc.testConnection(config.url, config.key)
+    const reset = await window.electron.invoke('db:resetForLicenseChange') as any
+    if (!reset?.success) throw new Error(reset?.error || 'No se pudo limpiar la base de datos local')
     const empresasGuardadas = await tmc.cacheCompanyLocally()
-    toast.add({ severity: 'success', summary: 'Empresa guardada', detail: `${empresasGuardadas} registro(s) guardados localmente`, life: 3000 })
+    const usuariosGuardados = await tmc.cacheLoginUsersLocally()
+    await almacenStore.load()
+    await empresaState.cargar()
     dialogoCambiarLicencia.value = false
     await cargarLicencia()
+    toast.add({
+      severity: 'success',
+      summary: 'Licencia cambiada',
+      detail: `${empresasGuardadas} empresa(s) y ${usuariosGuardados} usuario(s) aplicados. Descargando los demas datos...`,
+      life: 4000,
+    })
+    void import('@/services/tmCloudSyncService').then(async ({ downloadAllTables }) => {
+      const descarga = await downloadAllTables({ force: true })
+      toast.add({
+        severity: descarga.success ? 'success' : 'warn',
+        summary: descarga.success ? 'Datos sincronizados' : 'Sincronizacion parcial',
+        detail: descarga.message,
+        life: 5000,
+      })
+    }).catch((error: any) => {
+      toast.add({ severity: 'warn', summary: 'Sincronizacion pendiente', detail: error?.message || 'No se pudieron descargar todos los datos', life: 5000 })
+    })
   } catch (e: any) {
     nuevaLicenciaError.value = e.message || 'Error al cambiar licencia'
   } finally { nuevaLicenciaLoading.value = false }

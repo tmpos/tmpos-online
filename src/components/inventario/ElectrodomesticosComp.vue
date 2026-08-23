@@ -26,6 +26,8 @@ import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
 import InternetImageSearchDialog from '@/components/shared/InternetImageSearchDialog.vue'
+import ColorSelect from '@/components/shared/ColorSelect.vue'
+import CapacitySelect from '@/components/shared/CapacitySelect.vue'
 
 const toast = useToast()
 const auth = useAuthStore()
@@ -96,8 +98,8 @@ function removerSerialBatch(serial: string) {
 }
 
 const electrodomesticosAMoverHeader = computed(() => {
-  if (selectedElectrodomesticos.value.length > 1) return `Mover ${selectedElectrodomesticos.value.length} electrodomesticos a otro Almacen`
-  return 'Mover Electrodomestico a otro Almacen'
+  if (selectedElectrodomesticos.value.length > 1) return `Mover ${selectedElectrodomesticos.value.length} electrónicos a otro Almacén`
+  return 'Mover electrónico a otro Almacén'
 })
 
 const electrodomesticosFiltrados = computed(() => {
@@ -290,7 +292,7 @@ async function guardar() {
     toast.add({
       severity: 'success',
       summary: 'Guardado en la nube',
-      detail: `Electrodomestico ${isEditing.value ? 'actualizado' : 'creado'}`,
+      detail: `Electrónico ${isEditing.value ? 'actualizado' : 'creado'}`,
       life: 3000,
     })
     dialogVisible.value = false
@@ -302,7 +304,7 @@ async function guardar() {
 
 async function guardarSerial() {
   if (!selectedElectrodomestico.value?.id) {
-    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona un electrodomestico', life: 3000 })
+    toast.add({ severity: 'warn', summary: 'Atención', detail: 'Selecciona un electrónico', life: 3000 })
     return
   }
 
@@ -356,7 +358,7 @@ async function guardarSerial() {
 
 async function agregarSerialEnLote() {
   if (!selectedElectrodomestico.value?.id) {
-    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona un electrodomestico', life: 3000 })
+    toast.add({ severity: 'warn', summary: 'Atención', detail: 'Selecciona un electrónico', life: 3000 })
     return
   }
 
@@ -524,15 +526,15 @@ async function moverElectrodomesticoAlmacen() {
     selectedElectrodomesticos.value = []
     toast.add({
       severity: 'success',
-      summary: 'Electrodomestico trasladado',
+      summary: 'Electrónico trasladado',
       detail: movidos > 1
-        ? `${movidos} electrodomesticos y ${serialesMovidos} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`
+        ? `${movidos} electrónicos y ${serialesMovidos} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`
         : `${electrodomesticosAMover[0].nombre} y ${serialesMovidos} serial(es) disponibles fueron movidos a ${almacenDestino.value.nombre}`,
       life: 4000,
     })
     await cargarElectrodomesticos()
   } catch (error: any) {
-    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo trasladar el electrodomestico', life: 4000 })
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo trasladar el electrónico', life: 4000 })
   } finally {
     moviendoAlmacen.value = false
   }
@@ -542,7 +544,7 @@ async function borrar() {
   try {
     const res = await window.db.delete('electrodomesticos', selectedElectrodomestico.value.id)
     if (res.success) {
-      toast.add({ severity: 'success', summary: 'Exito', detail: 'Electrodomestico eliminado', life: 3000 })
+      toast.add({ severity: 'success', summary: 'Éxito', detail: 'Electrónico eliminado', life: 3000 })
     }
     deleteDialogVisible.value = false
     detalleDialogVisible.value = false
@@ -560,7 +562,7 @@ async function borrarMultiple() {
   }
   selectedElectrodomesticos.value = []
   deleteDialogVisible.value = false
-  toast.add({ severity: 'success', summary: 'Eliminados', detail: `${cantidad} electrodomestico(s) eliminados`, life: 3000 })
+  toast.add({ severity: 'success', summary: 'Eliminados', detail: `${cantidad} electrónico(s) eliminados`, life: 3000 })
   await cargarElectrodomesticos()
 }
 
@@ -682,11 +684,11 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
   <div>
     <Toast />
 
-    <Fieldset legend="Electrodomesticos">
+    <Fieldset legend="Electrónicos">
       <div class="toolbar-mobile">
         <IconField>
           <InputIcon class="pi pi-search" />
-          <InputText v-model="busqueda" placeholder="Buscar electrodomestico..." />
+          <InputText v-model="busqueda" placeholder="Buscar electrónico..." />
         </IconField>
         <div class="flex items-center gap-2">
           <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
@@ -713,7 +715,7 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
               <i class="pi pi-th-large"></i>
             </button>
           </div>
-          <Button label="Nuevo Electrodomestico" icon="pi pi-plus" @click="abrirCrear" />
+          <Button label="Nuevo electrónico" icon="pi pi-plus" @click="abrirCrear" />
         </div>
       </div>
 
@@ -777,13 +779,13 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
         </Column>
 
         <template #empty>
-          <div class="text-center py-6 text-surface-500">No hay electrodomesticos registrados.</div>
+          <div class="text-center py-6 text-surface-500">No hay electrónicos registrados.</div>
         </template>
       </DataTable>
 
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
-        <div v-else-if="electrodomesticosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay electrodomesticos registrados.</div>
+        <div v-else-if="electrodomesticosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay electrónicos registrados.</div>
         <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           <div
             v-for="elec in electrodomesticosFiltrados"
@@ -907,8 +909,8 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
           <p class="text-xs text-surface-500 mt-1">
             {{
               selectedElectrodomesticos.length > 1
-                ? `Se moveran los ${selectedElectrodomesticos.length} electrodomesticos seleccionados al almacen de destino.`
-                : `Tambien se moveran ${cantidadSerialesATrasladar} serial(es) disponibles asociados a este electrodomestico.`
+                ? `Se moverán los ${selectedElectrodomesticos.length} electrónicos seleccionados al almacén de destino.`
+                : `También se moverán ${cantidadSerialesATrasladar} serial(es) disponibles asociados a este electrónico.`
             }}
           </p>
         </div>
@@ -921,21 +923,21 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text :disabled="moviendoAlmacen" @click="dialogMoverAlmacen = false" />
-        <Button :label="selectedElectrodomesticos.length > 1 ? `Mover ${selectedElectrodomesticos.length} electrodomesticos` : 'Mover Electrodomestico'" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverElectrodomesticoAlmacen" />
+        <Button :label="selectedElectrodomesticos.length > 1 ? `Mover ${selectedElectrodomesticos.length} electrónicos` : 'Mover electrónico'" icon="pi pi-warehouse" severity="success" :loading="moviendoAlmacen" :disabled="!almacenDestino" @click="moverElectrodomesticoAlmacen" />
       </template>
     </Dialog>
 
     <!-- Dialog Crear/Editar -->
     <Dialog
       v-model:visible="dialogVisible"
-      :header="isEditing ? 'Editar Electrodomestico' : 'Nuevo Electrodomestico'"
+      :header="isEditing ? 'Editar electrónico' : 'Nuevo electrónico'"
       modal
       :style="{ width: '28rem' }"
     >
       <div class="flex flex-col gap-4 pt-2">
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Nombre</label>
-          <InputText v-model="form.nombre" placeholder="Nombre del electrodomestico" fluid class="uppercase" style="text-transform: uppercase;" />
+          <InputText v-model="form.nombre" placeholder="Nombre del electrónico" fluid class="uppercase" style="text-transform: uppercase;" />
         </div>
 
         <div class="flex flex-col gap-2">
@@ -1009,12 +1011,12 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Capacidad</label>
-          <InputText v-model="serialForm.capacidad" placeholder="Ej: 128GB" fluid class="uppercase" style="text-transform: uppercase;" />
+          <CapacitySelect v-model="serialForm.capacidad" />
         </div>
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Color</label>
-          <InputText v-model="serialForm.color" placeholder="Color" fluid class="uppercase" style="text-transform: uppercase;" />
+          <ColorSelect v-model="serialForm.color" />
         </div>
 
         <div class="flex flex-col gap-1 sm:col-span-2">
@@ -1070,11 +1072,11 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
-            <InputText v-model="serialForm.capacidad" placeholder="Ej: 128GB" fluid class="uppercase" style="text-transform: uppercase;" />
+            <CapacitySelect v-model="serialForm.capacidad" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
-            <InputText v-model="serialForm.color" placeholder="Color" fluid class="uppercase" style="text-transform: uppercase;" />
+            <ColorSelect v-model="serialForm.color" />
           </div>
         </div>
 
@@ -1103,7 +1105,7 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
     >
       <div class="flex items-center gap-3">
         <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span v-if="selectedElectrodomesticos.length > 1">Seguro que deseas eliminar los <strong>{{ selectedElectrodomesticos.length }}</strong> electrodomesticos seleccionados?</span>
+        <span v-if="selectedElectrodomesticos.length > 1">¿Seguro que deseas eliminar los <strong>{{ selectedElectrodomesticos.length }}</strong> electrónicos seleccionados?</span>
         <span v-else>Seguro que deseas eliminar <strong>{{ selectedElectrodomestico?.nombre }}</strong>?</span>
       </div>
       <template #footer>

@@ -236,10 +236,30 @@ export async function cacheCompanyLocally(): Promise<number> {
   const clear = await (window as any).electron.invoke('db:clearEmpresaOnly')
   if (!clear?.success) throw new Error(clear?.error || 'No se pudo preparar la empresa local')
   for (const empresa of normalized) {
-    const saved = await (window as any).db.insert('empresa', empresa)
+    const saved = await (window as any).electron.invoke('db:insertCloud', 'empresa', empresa)
     if (!saved?.success) throw new Error(saved?.error || 'No se pudo guardar la empresa localmente')
   }
   return normalized.length
+}
+
+export async function cacheLoginUsersLocally(): Promise<number> {
+  const rows = await fetchTable('usuarios')
+  if (rows.length === 0) throw new Error('TM Cloud no contiene usuarios de acceso')
+  let saved = 0
+  for (const row of rows) {
+    const normalized = Object.fromEntries(
+      Object.entries(row)
+        .filter(([key]) => key !== 'id')
+        .map(([key, value]) => [
+          key,
+          value !== null && typeof value === 'object' ? JSON.stringify(value) : value,
+        ]),
+    )
+    const result = await (window as any).electron.invoke('db:insertCloud', 'usuarios', normalized)
+    if (!result?.success) throw new Error(result?.error || 'No se pudo guardar un usuario localmente')
+    saved++
+  }
+  return saved
 }
 
 export async function insertRecord(tabla: string, data: any) {

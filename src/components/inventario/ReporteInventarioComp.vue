@@ -27,6 +27,8 @@ const almacenFiltro = ref(TODOS_ALMACENES)
 const imeisRaw = ref<any[]>([])
 const accesoriosRaw = ref<any[]>([])
 const piezasRaw = ref<any[]>([])
+const electrodomesticosRaw = ref<any[]>([])
+const serialesRaw = ref<any[]>([])
 
 function almacenKey(almacen: any): string {
   return almacen?.uid ? `uid:${almacen.uid}` : `id:${Number(almacen?.id || 0)}`
@@ -73,11 +75,22 @@ function almacenArchivo(): string {
 const imeis = computed(() => imeisRaw.value.filter(coincideAlmacen))
 const accesorios = computed(() => accesoriosRaw.value.filter(coincideAlmacen))
 const piezas = computed(() => piezasRaw.value.filter(coincideAlmacen))
+const electrodomesticos = computed(() => electrodomesticosRaw.value.filter(coincideAlmacen))
+const seriales = computed(() => serialesRaw.value.filter(coincideAlmacen))
+const serialesDisponibles = computed(() => seriales.value
+  .filter(item => String(item.estado || '').toUpperCase() === 'DISPONIBLE')
+  .map(item => {
+    const equipo = electrodomesticos.value.find(actual =>
+      (item.equipo_uid && actual.uid && String(actual.uid) === String(item.equipo_uid)) ||
+      Number(actual.id || 0) === Number(item.id_equi || 0))
+    return { ...item, equipo_nombre: equipo?.nombre || item.equipo || 'SIN MODELO' }
+  }))
 
 const vistas = computed(() => [
   { label: 'Todos', value: 'todos' },
   ...(systemMode.isCellphoneStore ? [{ label: 'IMEI', value: 'imei' }] : []),
   { label: systemMode.productLabel, value: 'accesorios' },
+  { label: 'Electrónicos', value: 'electrodomesticos' },
   { label: 'Piezas', value: 'piezas' },
 ])
 
@@ -106,16 +119,19 @@ const resumen = computed(() => {
   const valorAccesorios = accesorios.value.reduce((s, a) => s + (Number(a.precio_venta || 0) * Number(a.cantidad || 0)), 0)
   const costoPiezas = piezas.value.reduce((s, p) => s + (Number(p.costo || 0) * Number(p.cantidad || 0)), 0)
   const valorPiezas = piezas.value.reduce((s, p) => s + (Number(p.precio_venta || 0) * Number(p.cantidad || 0)), 0)
+  const costoElectrodomesticos = serialesDisponibles.value.reduce((s, item) => s + Number(item.costo || 0), 0)
+  const valorElectrodomesticos = serialesDisponibles.value.reduce((s, item) => s + Number(item.precio_venta || 0), 0)
 
   return {
-    totalItems: (systemMode.isCellphoneStore ? imeisDisponibles.value.length : 0) + accesorios.value.reduce((s, a) => s + Number(a.cantidad || 0), 0) + piezas.value.reduce((s, p) => s + Number(p.cantidad || 0), 0),
-    costoTotal: costoImeis + costoAccesorios + costoPiezas,
-    valorTotal: valorImeis + valorAccesorios + valorPiezas,
-    gananciaPotencial: (valorImeis + valorAccesorios + valorPiezas) - (costoImeis + costoAccesorios + costoPiezas),
+    totalItems: (systemMode.isCellphoneStore ? imeisDisponibles.value.length : 0) + accesorios.value.reduce((s, a) => s + Number(a.cantidad || 0), 0) + piezas.value.reduce((s, p) => s + Number(p.cantidad || 0), 0) + serialesDisponibles.value.length,
+    costoTotal: costoImeis + costoAccesorios + costoPiezas + costoElectrodomesticos,
+    valorTotal: valorImeis + valorAccesorios + valorPiezas + valorElectrodomesticos,
+    gananciaPotencial: (valorImeis + valorAccesorios + valorPiezas + valorElectrodomesticos) - (costoImeis + costoAccesorios + costoPiezas + costoElectrodomesticos),
     imeisDisponibles: imeisDisponibles.value.length,
     imeisVendidos: imeisVendidos.value.length,
     accesorios: accesorios.value.length,
     piezas: piezas.value.length,
+    electrodomesticos: serialesDisponibles.value.length,
     alertas: accesoriosBajoStock.value.length + piezasBajoStock.value.length,
   }
 })
@@ -123,15 +139,19 @@ const resumen = computed(() => {
 async function cargarDatos() {
   loading.value = true
   try {
-    const [resImeis, resAccesorios, resPiezas] = await Promise.all([
+    const [resImeis, resAccesorios, resPiezas, resElectrodomesticos, resSeriales] = await Promise.all([
       window.db.getAll('imei'),
       window.db.getAll('accesorios'),
       window.db.getAll('piezas'),
+      window.db.getAll('electrodomesticos'),
+      window.db.getAll('serial'),
     ])
 
     imeisRaw.value = resImeis.success ? resImeis.data || [] : []
     accesoriosRaw.value = resAccesorios.success ? resAccesorios.data || [] : []
     piezasRaw.value = resPiezas.success ? resPiezas.data || [] : []
+    electrodomesticosRaw.value = resElectrodomesticos.success ? resElectrodomesticos.data || [] : []
+    serialesRaw.value = resSeriales.success ? resSeriales.data || [] : []
   } catch (error) {
     console.error(error)
     toast.add({ severity: 'error', summary: 'Error', detail: 'No se pudo cargar el inventario', life: 3000 })
@@ -160,6 +180,10 @@ function buildPdfHtml(fecha: string): string {
     <tr><td>${escapeHtml(p.nombre)}</td><td>${escapeHtml(p.proveedor || '-')}</td><td>${escapeHtml(nombreAlmacenItem(p))}</td><td class="right">${p.cantidad || 0}</td><td class="money">${getSystemCurrencyCode()} ${money(p.costo)}</td><td class="money">${getSystemCurrencyCode()} ${money(p.precio_venta)}</td></tr>
   `).join('')
 
+  const rowsElectrodomesticos = serialesDisponibles.value.map(s => `
+    <tr><td>${escapeHtml(s.nombre)}</td><td>${escapeHtml(s.equipo_nombre || '-')}</td><td>${escapeHtml(nombreAlmacenItem(s))}</td><td>${escapeHtml(s.color || '-')}</td><td>${escapeHtml(s.capacidad || '-')}</td><td class="money">${getSystemCurrencyCode()} ${money(s.costo)}</td><td class="money">${getSystemCurrencyCode()} ${money(s.precio_venta)}</td></tr>
+  `).join('')
+
   const imeiSection = systemMode.isCellphoneStore
     ? `<div class="sec">IMEI disponibles</div><table class="data"><thead><tr><th>IMEI</th><th>Telefono</th><th>Almacén</th><th>Color</th><th>Capacidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsImeis || '<tr><td colspan="7">Sin IMEI disponibles</td></tr>'}</tbody></table>`
     : ''
@@ -174,6 +198,7 @@ function buildPdfHtml(fecha: string): string {
     <div class="sec">Resumen</div>
     <table class="cards"><tr><td class="card"><div class="label">Items</div><div class="value">${resumen.value.totalItems}</div></td><td class="card"><div class="label">Costo</div><div class="value">${getSystemCurrencyCode()} ${money(resumen.value.costoTotal)}</div></td><td class="card green"><div class="label">Valor</div><div class="value">${getSystemCurrencyCode()} ${money(resumen.value.valorTotal)}</div></td><td class="card amber"><div class="label">Alertas</div><div class="value">${resumen.value.alertas}</div></td></tr></table>
     ${imeiSection}
+    <div class="sec">Electrónicos disponibles</div><table class="data"><thead><tr><th>Serial</th><th>Modelo</th><th>Almacén</th><th>Color</th><th>Capacidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsElectrodomesticos || '<tr><td colspan="7">Sin electrónicos disponibles</td></tr>'}</tbody></table>
     <div class="sec">${productTitle}</div><table class="data"><thead><tr><th>Nombre</th><th>Marca</th><th>Almacén</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsAcc || `<tr><td colspan="6">Sin ${productTitle.toLowerCase()}</td></tr>`}</tbody></table>
     <div class="sec">Piezas</div><table class="data"><thead><tr><th>Nombre</th><th>Proveedor</th><th>Almacén</th><th class="right">Cantidad</th><th class="money">Costo</th><th class="money">Venta</th></tr></thead><tbody>${rowsPiezas || '<tr><td colspan="6">Sin piezas</td></tr>'}</tbody></table>
     <div class="footer"><span>MrCuttiTechnology</span><span>Generado el ${fecha}</span></div>
@@ -275,7 +300,7 @@ onMounted(async () => {
       </div>
 
       <div v-else class="space-y-5">
-        <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3">
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-surface-400">Items</span>
             <p class="text-2xl font-bold mt-1">{{ resumen.totalItems }}</p>
@@ -297,6 +322,10 @@ onMounted(async () => {
             <p class="text-2xl font-bold mt-1">{{ resumen.accesorios }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+            <span class="text-xs text-cyan-600 font-semibold">Electrónicos</span>
+            <p class="text-2xl font-bold mt-1">{{ resumen.electrodomesticos }}</p>
+          </div>
+          <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-orange-500 font-semibold">Alertas</span>
             <p class="text-2xl font-bold mt-1">{{ resumen.alertas }}</p>
           </div>
@@ -307,6 +336,21 @@ onMounted(async () => {
           <DataTable :value="imeisDisponibles" paginator :rows="10" responsiveLayout="scroll">
             <Column field="nombre" header="IMEI" sortable />
             <Column field="telefono_nombre" header="Telefono" sortable />
+            <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable>
+              <template #body="{ data }">{{ nombreAlmacenItem(data) }}</template>
+            </Column>
+            <Column field="color" header="Color" sortable />
+            <Column field="capacidad" header="Capacidad" sortable />
+            <Column field="precio_venta" header="Venta" sortable><template #body="{ data }">{{ $formatMoney(data.precio_venta) }}</template></Column>
+            <Column field="estado" header="Estado"><template #body="{ data }"><Tag :value="data.estado" :severity="estadoSeverity(data.estado)" /></template></Column>
+          </DataTable>
+        </div>
+
+        <div v-if="vista === 'todos' || vista === 'electrodomesticos'" class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+          <h3 class="font-semibold text-sm mb-3">Electrónicos disponibles</h3>
+          <DataTable :value="serialesDisponibles" paginator :rows="10" responsiveLayout="scroll">
+            <Column field="nombre" header="Serial" sortable />
+            <Column field="equipo_nombre" header="Modelo" sortable />
             <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable>
               <template #body="{ data }">{{ nombreAlmacenItem(data) }}</template>
             </Column>

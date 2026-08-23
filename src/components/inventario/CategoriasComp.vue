@@ -13,6 +13,7 @@ import Fieldset from 'primevue/fieldset'
 import Tooltip from 'primevue/tooltip'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 
 import { envioElectron } from '@/funciones/funciones.js';
 import { useDatosEmpresa } from '@/stores'
@@ -67,11 +68,17 @@ async function cargarCategorias() {
   loading.value = true
   try {
     const res = await window.db.getAll('categorias')
-    if (res.success) {
-      categorias.value = res.data || []
-    }
-  } catch (error) {
-    console.error(error)
+    if (!res.success) throw new Error(res.error || 'TM Cloud no pudo consultar las categorias')
+    categorias.value = Array.isArray(res.data) ? res.data : []
+  } catch (error: any) {
+    categorias.value = []
+    console.error('[Categorias] Error consultando TM Cloud:', error)
+    toast.add({
+      severity: 'error',
+      summary: 'No se cargaron las categorias',
+      detail: error?.message || 'Error consultando TM Cloud',
+      life: 5000,
+    })
   } finally {
     loading.value = false
   }
@@ -224,6 +231,8 @@ onMounted(async () => {
 
   await cargarCategorias()
 })
+
+useCloudRefresh(['categorias'], cargarCategorias)
 </script>
 
 <template>

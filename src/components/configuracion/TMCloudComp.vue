@@ -641,6 +641,21 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],
+  colores: [
+    { name: 'uid', type: 'TEXT' },
+    { name: 'nombre', type: 'TEXT' },
+    { name: 'codigo', type: 'TEXT' },
+    { name: 'estado', type: 'TEXT' },
+    { name: 'created_at', type: 'DATETIME' },
+    { name: 'updated_at', type: 'DATETIME' },
+  ],
+  capacidades: [
+    { name: 'uid', type: 'TEXT' },
+    { name: 'nombre', type: 'TEXT' },
+    { name: 'estado', type: 'TEXT' },
+    { name: 'created_at', type: 'DATETIME' },
+    { name: 'updated_at', type: 'DATETIME' },
+  ],
   accesorios: [
     { name: 'uid', type: 'TEXT' },
     { name: 'nombre', type: 'TEXT' },

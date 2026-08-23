@@ -2,7 +2,7 @@
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -13,6 +13,7 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
 import Fieldset from 'primevue/fieldset'
+import Calendar from 'primevue/calendar'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -29,6 +30,18 @@ const deleteDialogVisible = ref(false)
 const isEditing = ref(false)
 const selectedTecnico = ref<any>(null)
 const busqueda = ref('')
+const ordenesPagadas = ref<any[]>([])
+const loadingPagos = ref(false)
+const busquedaPagos = ref('')
+const fechaPagoDesde = ref<Date | null>(null)
+const fechaPagoHasta = ref<Date | null>(null)
+const estadoPagoFiltro = ref<'TODOS' | 'PAGADO' | 'PENDIENTE'>('TODOS')
+const historialPagosRef = ref<any>(null)
+const tecnicoRegistroFiltro = ref('')
+const generandoPdfPagos = ref(false)
+const dialogPdfPagos = ref(false)
+const pdfPagosUrl = ref('')
+const pdfPagosNombre = ref('')
 
 const estados = [
   { label: 'Activo', value: 'ACTIVO' },
@@ -75,6 +88,106 @@ const tecnicosFiltrados = computed(() => {
     t.estado?.toLowerCase().includes(texto)
   )
 })
+
+function fechaPagoOrden(orden: any): string {
+  return String(orden.fecha_pago_tecnico || orden.updated_at || orden.fecha_entrega || orden.fecha_entrada || '').slice(0, 10)
+}
+
+const pagosBaseFiltrados = computed(() => {
+  const texto = busquedaPagos.value.toLowerCase().trim()
+  const desde = fechaPagoDesde.value ? fechaPagoDesde.value.toISOString().slice(0, 10) : ''
+  const hasta = fechaPagoHasta.value ? fechaPagoHasta.value.toISOString().slice(0, 10) : ''
+  return ordenesPagadas.value.filter((orden: any) => {
+    const fecha = fechaPagoOrden(orden)
+    const coincideFecha = (!desde || fecha >= desde) && (!hasta || fecha <= hasta)
+    const coincideTexto = !texto || [orden.tecnico, orden.no_orden, orden.nombre, orden.equipo]
+      .some(valor => String(valor || '').toLowerCase().includes(texto))
+    const coincideTecnico = !tecnicoRegistroFiltro.value || String(orden.tecnico || '').trim().toUpperCase() === tecnicoRegistroFiltro.value.toUpperCase()
+    return coincideFecha && coincideTexto && coincideTecnico
+  })
+})
+
+const pagosFiltrados = computed(() => pagosBaseFiltrados.value.filter((orden: any) => {
+  if (estadoPagoFiltro.value === 'TODOS') return true
+  const estado = String(orden.estado_pago_tecnico || 'PENDIENTE').trim().toUpperCase()
+  return estadoPagoFiltro.value === 'PAGADO' ? estado === 'PAGADO' : estado !== 'PAGADO'
+}))
+
+const totalPagadoTecnicos = computed(() =>
+  pagosBaseFiltrados.value
+    .filter((orden: any) => String(orden.estado_pago_tecnico || '').trim().toUpperCase() === 'PAGADO')
+    .reduce((total, orden) => total + Number(orden.beneficio_tecnico || 0), 0)
+)
+const totalPendienteTecnicos = computed(() =>
+  pagosBaseFiltrados.value
+    .filter((orden: any) => String(orden.estado_pago_tecnico || '').trim().toUpperCase() !== 'PAGADO')
+    .reduce((total, orden) => total + Number(orden.beneficio_tecnico || 0), 0)
+)
+
+async function cargarPagosTecnicos() {
+  loadingPagos.value = true
+  try {
+    const res = await window.db.getAll('ordenes_taller')
+    if (!res.success) throw new Error(res.error || 'No se pudo cargar el historial')
+    ordenesPagadas.value = filterByAlmacen(res.data || [])
+      .filter((orden: any) => String(orden.tecnico || '').trim() && Number(orden.beneficio_tecnico || 0) > 0)
+      .sort((a: any, b: any) => fechaPagoOrden(b).localeCompare(fechaPagoOrden(a)))
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo cargar el historial de pagos.', life: 3500 })
+  } finally {
+    loadingPagos.value = false
+  }
+}
+
+async function verRegistrosTecnico(tecnico: any) {
+  busquedaPagos.value = String(tecnico?.nombre || '').trim()
+  tecnicoRegistroFiltro.value = busquedaPagos.value
+  estadoPagoFiltro.value = 'TODOS'
+  fechaPagoDesde.value = null
+  fechaPagoHasta.value = null
+  await nextTick()
+  historialPagosRef.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;')
+}
+
+async function generarPdfPagosTecnicos() {
+  if (pagosFiltrados.value.length === 0) {
+    toast.add({ severity: 'info', summary: 'Sin registros', detail: 'No hay pagos para generar el PDF.', life: 2800 })
+    return
+  }
+  generandoPdfPagos.value = true
+  try {
+    const currencyCode = systemCurrency.value
+    const localeCode = systemLocale.value
+    const empresaRes = await window.db.getAll('empresa')
+    const empresa = empresaRes.success ? empresaRes.data?.[0] || {} : {}
+    const periodo = fechaPagoDesde.value || fechaPagoHasta.value
+      ? `${fechaPagoDesde.value?.toLocaleDateString(localeCode) || 'Inicio'} - ${fechaPagoHasta.value?.toLocaleDateString(localeCode) || 'Hoy'}`
+      : 'Todos los registros'
+    const filas = pagosFiltrados.value.map((orden: any, index: number) => `<tr><td>${index + 1}</td><td>${escapeHtml(fechaPagoOrden(orden))}</td><td>${escapeHtml(orden.tecnico)}</td><td>${escapeHtml(orden.no_orden || `#${orden.id}`)}</td><td>${escapeHtml(orden.nombre || '-')}</td><td>${escapeHtml(orden.equipo || '-')}</td><td>${String(orden.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? 'PAGADA' : 'SIN PAGAR'}</td><td class="money">${escapeHtml(currencyCode)} ${Number(orden.beneficio_tecnico || 0).toLocaleString(localeCode, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr>`).join('')
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Registro de Técnicos</title><style>@page{margin:12mm}*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#1f2937;font-size:10px;margin:0}.bar{height:7px;background:#7c3aed;margin-bottom:18px}.head{display:flex;justify-content:space-between;border-bottom:2px solid #7c3aed;padding-bottom:12px}.head h1{margin:0;font-size:21px}.meta{text-align:right;line-height:1.6}.summary{display:flex;gap:12px;margin:18px 0}.card{flex:1;border:1px solid #ddd;border-radius:7px;padding:12px;background:#f9fafb}.card.total{background:#f5f3ff;border-color:#c4b5fd}.label{font-size:9px;text-transform:uppercase;color:#6b7280}.value{font-size:20px;font-weight:bold;color:#6d28d9;margin-top:3px}table{width:100%;border-collapse:collapse}th{background:#312e81;color:#fff;padding:8px;text-align:left;text-transform:uppercase;font-size:9px}td{padding:8px;border-bottom:1px solid #e5e7eb}tbody tr:nth-child(even){background:#f9fafb}.money{text-align:right;white-space:nowrap;font-weight:bold}.footer{margin-top:20px;border-top:1px solid #ddd;padding-top:8px;color:#6b7280;display:flex;justify-content:space-between}</style></head><body><div class="bar"></div><div class="head"><div><h1>${escapeHtml(empresa.nombre || 'MI EMPRESA')}</h1><p>Registro de órdenes y pagos a técnicos</p></div><div class="meta"><strong>Estado: ${escapeHtml(estadoPagoFiltro.value)}</strong><br>Período: ${escapeHtml(periodo)}<br>Filtro: ${escapeHtml(tecnicoRegistroFiltro.value || busquedaPagos.value || 'Todos')}</div></div><div class="summary"><div class="card"><div class="label">Órdenes mostradas</div><div class="value">${pagosFiltrados.value.length}</div></div><div class="card total"><div class="label">Total pagado</div><div class="value">${escapeHtml(currencyCode)} ${totalPagadoTecnicos.value.toLocaleString(localeCode, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div><div class="card"><div class="label">Pendiente</div><div class="value">${escapeHtml(currencyCode)} ${totalPendienteTecnicos.value.toLocaleString(localeCode, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div></div><table><thead><tr><th>#</th><th>Fecha</th><th>Técnico</th><th>Orden</th><th>Cliente</th><th>Equipo</th><th>Estado</th><th class="money">Monto</th></tr></thead><tbody>${filas}</tbody></table><div class="footer"><span>MrCuttiTechnology</span><span>Generado: ${new Date().toLocaleString(localeCode)}</span></div></body></html>`
+    const nombre = `Pagos_Tecnicos_${new Date().toISOString().slice(0, 10)}.pdf`
+    const res = await window.electron.invoke('generate:pdf', html, nombre) as any
+    if (!res.success) throw new Error(res.error || 'No se pudo generar el PDF')
+    pdfPagosUrl.value = res.dataUrl
+    pdfPagosNombre.value = nombre
+    dialogPdfPagos.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo generar el PDF.', life: 3500 })
+  } finally {
+    generandoPdfPagos.value = false
+  }
+}
+
+async function descargarPdfPagos() {
+  if (!pdfPagosUrl.value) return
+  const res = await window.electron.invoke('save:pdf', pdfPagosUrl.value, pdfPagosNombre.value) as any
+  if (res.success) toast.add({ severity: 'success', summary: 'Guardado', detail: 'PDF descargado correctamente.', life: 2500 })
+  else toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo guardar el PDF.', life: 3000 })
+}
 
 async function cargarTecnicos() {
   loading.value = true
@@ -195,7 +308,7 @@ onMounted(async () => {
     console.error('Error cargando configuracion:', error)
   }
 
-  await cargarTecnicos()
+  await Promise.all([cargarTecnicos(), cargarPagosTecnicos()])
 })
 </script>
 
@@ -307,6 +420,7 @@ onMounted(async () => {
             </div>
 
             <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
+              <Button label="Registros" icon="pi pi-history" severity="success" text size="small" @click.stop="verRegistrosTecnico(tecnico)" />
               <Button icon="pi pi-pencil" severity="info" text rounded size="small" @click.stop="abrirEditar(tecnico)" v-tooltip="'Editar'" />
               <Button icon="pi pi-trash" severity="danger" text rounded size="small" @click.stop="confirmarBorrar(tecnico)" v-tooltip="'Eliminar'" />
             </div>
@@ -314,6 +428,78 @@ onMounted(async () => {
         </div>
       </div>
     </Fieldset>
+
+    <Fieldset ref="historialPagosRef" legend="Registro de órdenes por técnico" class="mt-5 scroll-mt-4">
+      <div class="space-y-4">
+        <div class="flex items-end justify-between gap-3 flex-wrap">
+          <div class="flex items-end gap-3 flex-wrap">
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-medium text-surface-500">Buscar</label>
+              <IconField>
+                <InputIcon class="pi pi-search" />
+                <InputText v-model="busquedaPagos" placeholder="Técnico, orden, cliente..." @input="tecnicoRegistroFiltro = ''" />
+              </IconField>
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-medium text-surface-500">Desde</label>
+              <Calendar v-model="fechaPagoDesde" dateFormat="dd/mm/yy" placeholder="Desde" showIcon showButtonBar />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-medium text-surface-500">Hasta</label>
+              <Calendar v-model="fechaPagoHasta" dateFormat="dd/mm/yy" placeholder="Hasta" showIcon showButtonBar />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-medium text-surface-500">Estado</label>
+              <Select v-model="estadoPagoFiltro" :options="[{ label: 'Todas', value: 'TODOS' }, { label: 'Pagadas', value: 'PAGADO' }, { label: 'Sin pagar', value: 'PENDIENTE' }]" optionLabel="label" optionValue="value" class="w-36" />
+            </div>
+            <Button icon="pi pi-refresh" severity="secondary" outlined :loading="loadingPagos" @click="cargarPagosTecnicos" v-tooltip="'Actualizar historial'" />
+            <Button label="PDF" icon="pi pi-file-pdf" severity="danger" :loading="generandoPdfPagos" @click="generarPdfPagosTecnicos" />
+          </div>
+
+          <div class="flex gap-3 flex-wrap">
+            <div class="rounded-xl border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 px-5 py-3 min-w-48">
+              <p class="text-xs font-semibold text-green-600">Total pagado</p>
+              <p class="text-2xl font-bold text-green-700 dark:text-green-400">{{ $formatMoney(totalPagadoTecnicos) }}</p>
+            </div>
+            <div class="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-5 py-3 min-w-48">
+              <p class="text-xs font-semibold text-amber-600">Pendiente de pago</p>
+              <p class="text-2xl font-bold text-amber-700 dark:text-amber-400">{{ $formatMoney(totalPendienteTecnicos) }}</p>
+            </div>
+          </div>
+        </div>
+
+        <DataTable :value="pagosFiltrados" :loading="loadingPagos" stripedRows paginator :rows="10" :rowsPerPageOptions="[10, 25, 50]" dataKey="id" responsiveLayout="scroll">
+          <Column field="fecha_pago_tecnico" header="Fecha de pago" sortable style="width: 10rem">
+            <template #body="{ data }">{{ fechaPagoOrden(data) || '-' }}</template>
+          </Column>
+          <Column field="tecnico" header="Técnico" sortable />
+          <Column field="no_orden" header="Orden" sortable style="width: 9rem">
+            <template #body="{ data }">{{ data.no_orden || `#${data.id}` }}</template>
+          </Column>
+          <Column field="nombre" header="Cliente" sortable />
+          <Column field="equipo" header="Equipo" sortable />
+          <Column field="beneficio_tecnico" header="Monto técnico" sortable style="width: 11rem">
+            <template #body="{ data }"><span class="font-bold" :class="String(data.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? 'text-green-600' : 'text-amber-600'">{{ $formatMoney(data.beneficio_tecnico || 0) }}</span></template>
+          </Column>
+          <Column field="estado_pago_tecnico" header="Estado" sortable style="width: 9rem">
+            <template #body="{ data }">
+              <span class="text-xs font-semibold rounded-full px-2 py-1" :class="String(data.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'">{{ String(data.estado_pago_tecnico || 'PENDIENTE').toUpperCase() === 'PAGADO' ? 'PAGADA' : 'SIN PAGAR' }}</span>
+            </template>
+          </Column>
+          <template #empty>
+            <div class="text-center py-8 text-surface-500">No hay órdenes de técnicos para los filtros seleccionados.</div>
+          </template>
+        </DataTable>
+      </div>
+    </Fieldset>
+
+    <Dialog v-model:visible="dialogPdfPagos" header="Vista previa - Pagos a técnicos" modal :style="{ width: '85vw', height: '90vh' }" :draggable="false">
+      <iframe v-if="pdfPagosUrl" :src="pdfPagosUrl" class="w-full border-0 rounded-lg bg-white" style="height:72vh" title="Registro PDF de pagos a técnicos"></iframe>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" text @click="dialogPdfPagos = false" />
+        <Button label="Descargar PDF" icon="pi pi-download" @click="descargarPdfPagos" />
+      </template>
+    </Dialog>
 
     <Dialog
       v-model:visible="dialogVisible"

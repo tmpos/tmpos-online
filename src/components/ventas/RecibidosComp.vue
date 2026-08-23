@@ -3,7 +3,7 @@ import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -19,6 +19,7 @@ import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import InputOtp from 'primevue/inputotp'
 import ToggleSwitch from 'primevue/toggleswitch'
+import Menu from 'primevue/menu'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
@@ -26,14 +27,18 @@ import { envioElectron, encryptarPassword, peticionesFetch } from '@/funciones/f
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { ensureRecibidoCreditNote } from '@/services/recibidosCreditNoteService'
 import { useBulkWarehouseTransfer } from '@/composables/useBulkWarehouseTransfer'
+import ColorSelect from '@/components/shared/ColorSelect.vue'
+import CapacitySelect from '@/components/shared/CapacitySelect.vue'
 
 const toast = useToast()
 const route = useRoute()
+const router = useRouter()
 const { store: almacenStore, filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const recibidos = ref<any[]>([])
 const telefonos = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
+const tabRecibidoActivo = ref(0)
 const deleteDialogVisible = ref(false)
 const deleteMultipleDialogVisible = ref(false)
 const selectedRecibido = ref<any>(null)
@@ -51,9 +56,39 @@ const verTodosAlmacenes = ref(false)
 const dialogNuevoTelefono = ref(false)
 const nuevoTelefonoForm = ref({ nombre: '' })
 const guardandoTelefono = ref(false)
+const colorRapidoVisible = ref(false)
+const colorRapidoNombre = ref('')
+const colorRapidoCodigo = ref('#000000')
+const capacidadRapidaVisible = ref(false)
+const capacidadRapidaNombre = ref('')
 const generandoNC = ref(false)
 const enviandoTaller = ref(false)
 const publicandoImei = ref(false)
+const pdfVisible = ref(false)
+const pdfUrl = ref('')
+const pdfNombre = ref('')
+const pdfGenerandoId = ref<number | null>(null)
+const actionMenu = ref()
+const recibidoAccion = ref<any>(null)
+const buscadorImeiVisible = ref(false)
+const buscandoImeiSistema = ref(false)
+const resultadosImeiSistema = ref<any[]>([])
+
+const actionMenuItems = computed(() => [
+  { label: 'Buscar IMEI en el sistema', icon: 'pi pi-search', command: () => buscarImeiEnSistema(recibidoAccion.value) },
+  { label: 'Comprobante PDF', icon: 'pi pi-file-pdf', command: () => generarPdfRecibido(recibidoAccion.value) },
+  { label: 'Generar nota de crédito', icon: 'pi pi-file-minus', command: () => abrirNotaCreditoDialog(recibidoAccion.value) },
+  { label: 'Enviar al taller', icon: 'pi pi-wrench', command: () => abrirTallerDialog(recibidoAccion.value) },
+  { label: 'Publicar en IMEI', icon: 'pi pi-shopping-cart', command: () => abrirPublicarImei(recibidoAccion.value) },
+  { label: 'Editar', icon: 'pi pi-pencil', command: () => abrirEditar(recibidoAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', command: () => confirmarBorrar(recibidoAccion.value) },
+])
+
+function abrirMenuAcciones(event: Event, recibido: any) {
+  recibidoAccion.value = recibido
+  actionMenu.value?.toggle(event)
+}
 
 const {
   dialogMoverAlmacen, almacenDestino, almacenesDestino, moviendoAlmacen,
@@ -84,6 +119,13 @@ const imeiPublishForm = ref({
   precio_min: 0,
   precio_xmayor: 0,
 })
+
+function copiarPrecioVentaPublicacion() {
+  const precio = Number(imeiPublishForm.value.precio_venta || 0)
+  imeiPublishForm.value.precio_min = precio
+  imeiPublishForm.value.precio_xmayor = precio
+  toast.add({ severity: 'info', summary: 'Precios copiados', detail: 'Precio mínimo y precio por mayor actualizados', life: 2200 })
+}
 
 const formDefault = () => ({
   nombre: '',
@@ -214,6 +256,121 @@ function formatCurrency(n: number): string {
   return Number(n).toLocaleString(systemLocale.value, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function escapePdf(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#039;')
+}
+
+function normalizarImeiBusqueda(value: unknown): string {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function contieneImei(value: unknown, termino: string): boolean {
+  if (Array.isArray(value)) return value.some(item => contieneImei(item, termino))
+  if (!value || typeof value !== 'object') return false
+  return Object.entries(value as Record<string, unknown>).some(([key, content]) =>
+    (key.toLowerCase().includes('imei') && normalizarImeiBusqueda(content).includes(termino)) ||
+    (typeof content === 'object' && contieneImei(content, termino)))
+}
+
+function jsonSeguro(value: unknown, fallback: any = []): any {
+  if (typeof value !== 'string') return value ?? fallback
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+async function buscarImeiEnSistema(recibido: any) {
+  const imei = String(recibido?.nombre || recibido?.imei || '').trim()
+  const termino = normalizarImeiBusqueda(imei)
+  if (termino.length < 3) {
+    toast.add({ severity: 'warn', summary: 'IMEI inválido', detail: 'El recibido no tiene un IMEI válido para buscar', life: 3500 })
+    return
+  }
+  buscadorImeiVisible.value = true
+  buscandoImeiSistema.value = true
+  resultadosImeiSistema.value = []
+  try {
+    const [inventario, apartados, facturas, taller] = await Promise.all([
+      window.db.getAll('imei'), window.db.getAll('cuentas_cobrar'), window.db.getAll('facturas'), window.db.getAll('ordenes_taller'),
+    ])
+    const coincide = (value: unknown) => normalizarImeiBusqueda(value).includes(termino)
+    const resultados: any[] = []
+    for (const item of (inventario.success ? inventario.data || [] : [])) {
+      if (!coincide(item.nombre || item.imei)) continue
+      const nota = jsonSeguro(item.nota, {})
+      const esRecibido = ['RECIBIDO', 'EN_GARANTIA'].includes(String(item.estado || '').toUpperCase()) || Object.prototype.hasOwnProperty.call(nota, 'customer_name')
+      resultados.push({ key: `imei-${item.uid || item.id}`, origen: 'Inventario IMEI', icon: 'pi pi-barcode', titulo: item.nombre || item.imei, detalle: `${item.estado || 'SIN ESTADO'}${item.comprador ? ` · ${item.comprador}` : ''}${item.no_factura ? ` · Factura ${item.no_factura}` : ''}`, ruta: `/inventario?tab=imei&search=${encodeURIComponent(imei)}&estado=todos` })
+      if (esRecibido) {
+        resultados.push({ key: `recibido-${item.uid || item.id}`, origen: 'Recibidos', icon: 'pi pi-download', titulo: item.nombre || item.imei, detalle: `Equipo recibido · ${item.estado || 'RECIBIDO'}${nota.customer_name ? ` · ${nota.customer_name}` : ''}`, ruta: `/ventas?tab=recibidos&search=${encodeURIComponent(imei)}&estado=todos` })
+      }
+    }
+    for (const item of (apartados.success ? apartados.data || [] : [])) {
+      if (!coincide([item.imei, item.imei_nombre, item.notas].join(' '))) continue
+      resultados.push({ key: `apartado-${item.uid || item.id}`, origen: 'Apartados', icon: 'pi pi-bookmark', titulo: item.no_factura || item.no_apartado || 'Apartado', detalle: item.nombre_cliente || 'SIN CLIENTE', ruta: `/ventas?tab=apartados&search=${encodeURIComponent(imei)}` })
+    }
+    for (const item of (facturas.success ? facturas.data || [] : [])) {
+      if (!coincide(item.imei) && !contieneImei(jsonSeguro(item.productos, []), termino)) continue
+      resultados.push({ key: `factura-${item.uid || item.id}`, origen: 'Facturas', icon: 'pi pi-file', titulo: `Factura ${item.no_factura || item.id}`, detalle: item.nombre_cliente || 'CONSUMIDOR FINAL', ruta: `/ventas/editar/${item.id}` })
+    }
+    for (const item of (taller.success ? taller.data || [] : [])) {
+      if (!coincide(item.imei)) continue
+      resultados.push({ key: `taller-${item.uid || item.id}`, origen: 'Taller', icon: 'pi pi-wrench', titulo: item.no_orden || `Orden #${item.id}`, detalle: `${item.nombre || 'SIN CLIENTE'} · ${item.estado || ''}`, ruta: `/taller?tab=ordenes&search=${encodeURIComponent(imei)}` })
+    }
+    resultadosImeiSistema.value = resultados
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo buscar el IMEI', life: 4000 })
+  } finally { buscandoImeiSistema.value = false }
+}
+
+async function abrirResultadoImeiSistema(resultado: any) {
+  buscadorImeiVisible.value = false
+  await router.push(resultado.ruta)
+}
+
+function recibidoPdfHtml(recibido: any, empresa: any): string {
+  const cliente = getNotaDataFromImei(recibido)
+  const empresaNombre = empresa.nombre || empresa.legal || almacenStore.activeAlmacen?.nombre || 'TM POS'
+  const almacenNombre = almacenStore.almacenes.find((item: any) =>
+    (recibido.almacen_uid && String(item.uid || '') === String(recibido.almacen_uid)) ||
+    Number(item.id || 0) === Number(recibido.almacen_id || 0))?.nombre || almacenStore.activeAlmacen?.nombre || 'Principal'
+  const fecha = new Date(recibido.created_at || Date.now()).toLocaleString(systemLocale.value)
+  const precioRecepcion = `${systemCurrency.value} ${formatCurrency(Number(cliente.credit_note_value || recibido.costo || 0))}`
+  const numero = `REC-${String(recibido.id || '').padStart(6, '0')}`
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><style>
+  @page{size:letter;margin:13mm}*{box-sizing:border-box}body{margin:0;color:#172033;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}.page{max-width:190mm;margin:auto}.top{height:8px;background:linear-gradient(90deg,#0f766e,#14b8a6);border-radius:0 0 8px 8px}.header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;padding:20px 0 16px;border-bottom:2px solid #0f766e}.brand h1{font-size:21px;margin:0;color:#0f172a}.brand p{margin:3px 0;color:#64748b}.doc{text-align:right}.doc small{display:block;color:#0f766e;font-weight:800;letter-spacing:1.2px}.doc h2{font-size:24px;margin:3px 0}.badge{display:inline-block;background:#ccfbf1;color:#115e59;border-radius:999px;padding:4px 11px;font-weight:800}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin:16px 0}.box,.panel{border:1px solid #dbe4ee;border-radius:10px;background:#f8fafc}.box{padding:10px}.box span,.label{display:block;color:#64748b;font-size:9px;text-transform:uppercase;letter-spacing:.6px}.box strong{display:block;margin-top:3px}.title{font-size:12px;text-transform:uppercase;letter-spacing:.7px;margin:18px 0 8px;display:flex;align-items:center;gap:8px}.title:after{content:'';height:1px;background:#dbe4ee;flex:1}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.panel{overflow:hidden;background:#fff}.row{display:flex;justify-content:space-between;gap:14px;padding:9px 12px;border-bottom:1px solid #edf2f7}.row:last-child{border-bottom:0}.row strong{text-align:right}.amounts{display:grid;grid-template-columns:1fr;gap:12px;margin-top:14px}.amount{padding:15px;border-radius:11px;border:1px solid #99f6e4;background:#ecfdf5}.amount.secondary{border-color:#bfdbfe;background:#eff6ff}.amount strong{display:block;font-size:22px;color:#047857;margin-top:4px}.amount.secondary strong{color:#1d4ed8}.notice{margin-top:16px;padding:12px;border:1px solid #fde68a;background:#fffbeb;border-radius:10px;color:#78350f}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:60px;margin-top:54px}.signature{border-top:1px solid #64748b;padding-top:6px;text-align:center;color:#475569}.footer{margin-top:28px;padding-top:9px;border-top:1px solid #dbe4ee;color:#94a3b8;font-size:9px;display:flex;justify-content:space-between}
+  </style></head><body><main class="page"><div class="top"></div><header class="header"><div class="brand"><h1>${escapePdf(empresaNombre)}</h1><p>${escapePdf(empresa.direccion || '')}</p><p>${escapePdf([empresa.telefono, empresa.email].filter(Boolean).join(' • '))}</p></div><div class="doc"><small>COMPROBANTE DE RECEPCIÓN</small><h2>Equipo recibido</h2><span class="badge">${escapePdf(numero)}</span></div></header>
+  <section class="meta"><div class="box"><span>Fecha de recepción</span><strong>${escapePdf(fecha)}</strong></div><div class="box"><span>Almacén</span><strong>${escapePdf(almacenNombre)}</strong></div><div class="box"><span>Estado</span><strong>${escapePdf(estadoRecibido(recibido))}</strong></div></section>
+  <h3 class="title">Datos del cliente</h3><section class="grid"><div class="panel"><div class="row"><span>Nombre</span><strong>${escapePdf(cliente.customer_name || '-')}</strong></div><div class="row"><span>Cédula / RNC</span><strong>${escapePdf(cliente.customer_cedula || '-')}</strong></div><div class="row"><span>Teléfono</span><strong>${escapePdf(cliente.customer_phone || '-')}</strong></div></div><div class="panel"><div class="row"><span>Nota de crédito</span><strong>${escapePdf(cliente.credit_note_no || 'Pendiente')}</strong></div><div class="row"><span>Fecha NC</span><strong>${escapePdf(cliente.credit_note_date || '-')}</strong></div><div class="row"><span>Referencia</span><strong>${escapePdf(numero)}</strong></div></div></section>
+  <h3 class="title">Equipo recibido</h3><section class="panel"><div class="row"><span>Modelo</span><strong>${escapePdf(getNombreTelefono(recibido.id_equi) || recibido.equipo || '-')}</strong></div><div class="row"><span>IMEI</span><strong>${escapePdf(recibido.nombre || '-')}</strong></div><div class="row"><span>Color</span><strong>${escapePdf(recibido.color || '-')}</strong></div><div class="row"><span>Capacidad</span><strong>${escapePdf(recibido.capacidad || '-')}</strong></div></section>
+  <section class="amounts"><div class="amount"><span class="label">Precio de recepción</span><strong>${escapePdf(precioRecepcion)}</strong></div></section>
+  <div class="notice"><strong>Constancia:</strong> El cliente entrega el equipo descrito y confirma que los datos suministrados son correctos. La recepción queda sujeta a revisión física y técnica.</div>
+  <section class="signatures"><div class="signature">Firma del cliente</div><div class="signature">Firma del representante</div></section><footer class="footer"><span>Generado por TM POS</span><span>${escapePdf(new Date().toLocaleString(systemLocale.value))}</span></footer></main></body></html>`
+}
+
+async function generarPdfRecibido(recibido: any) {
+  pdfGenerandoId.value = Number(recibido.id)
+  try {
+    const empresaResult = await window.db.getAll('empresa')
+    const empresas = empresaResult.success && Array.isArray(empresaResult.data) ? empresaResult.data : []
+    const empresa = empresas.find((item: any) => String(item.uid || item.almacen_uid || '') === String(recibido.almacen_uid || almacenStore.activeUid || '')) || empresas[0] || {}
+    const archivo = `Recibido_${String(recibido.nombre || recibido.id || 'equipo').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`
+    const result = await window.electron.invoke('generate:pdf', recibidoPdfHtml(recibido, empresa), archivo) as { success: boolean; dataUrl?: string; error?: string }
+    if (!result.success || !result.dataUrl) throw new Error(result.error || 'No se pudo generar el PDF')
+    pdfUrl.value = result.dataUrl
+    pdfNombre.value = archivo
+    pdfVisible.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error al generar PDF', detail: error?.message || 'No se pudo generar el comprobante', life: 4500 })
+  } finally { pdfGenerandoId.value = null }
+}
+
+async function descargarPdfRecibido() {
+  if (!pdfUrl.value) return
+  const result = await window.electron.invoke('save:pdf', pdfUrl.value, pdfNombre.value) as { success: boolean; error?: string }
+  if (result.success) toast.add({ severity: 'success', summary: 'PDF guardado', detail: 'Comprobante descargado correctamente', life: 3000 })
+  else toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo guardar el PDF', life: 4000 })
+}
+
 function formatFecha(fechaStr: string): string {
   if (!fechaStr) return ''
   const parts = fechaStr.split('T')[0].split('-')
@@ -261,7 +418,61 @@ function abrirRecibir() {
   busquedaTelefono.value = ''
   clienteSeleccionadoBusqueda.value = null
   selectedRecibido.value = null
+  tabRecibidoActivo.value = 0
   dialogVisible.value = true
+}
+
+function abrirColorRapido() {
+  colorRapidoNombre.value = ''
+  colorRapidoCodigo.value = '#000000'
+  colorRapidoVisible.value = true
+}
+
+async function guardarColorRapido() {
+  const nombre = colorRapidoNombre.value.trim().toUpperCase()
+  if (!nombre) return
+  if (!/^#[0-9A-F]{6}$/i.test(colorRapidoCodigo.value)) {
+    toast.add({ severity: 'warn', summary: 'Código inválido', detail: 'Selecciona un color válido', life: 3000 })
+    return
+  }
+  const existentes = await window.db.getAll('colores')
+  if (existentes.success && (existentes.data || []).some((item: any) => String(item.nombre || '').toUpperCase() === nombre)) {
+    form.value.color = nombre
+    colorRapidoVisible.value = false
+    return
+  }
+  const result = await window.db.insert('colores', { nombre, codigo: colorRapidoCodigo.value, estado: 'activo' })
+  if (!result.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear el color', life: 4000 })
+    return
+  }
+  form.value.color = nombre
+  colorRapidoVisible.value = false
+  toast.add({ severity: 'success', summary: 'Color creado', detail: `${nombre} fue creado y seleccionado`, life: 2500 })
+}
+
+function abrirCapacidadRapida() {
+  capacidadRapidaNombre.value = ''
+  capacidadRapidaVisible.value = true
+}
+
+async function guardarCapacidadRapida() {
+  const nombre = capacidadRapidaNombre.value.trim().toUpperCase().replace(/\s+/g, '')
+  if (!nombre) return
+  const existentes = await window.db.getAll('capacidades')
+  if (existentes.success && (existentes.data || []).some((item: any) => String(item.nombre || '').toUpperCase() === nombre)) {
+    form.value.capacidad = nombre
+    capacidadRapidaVisible.value = false
+    return
+  }
+  const result = await window.db.insert('capacidades', { nombre, estado: 'activo' })
+  if (!result.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear la capacidad', life: 4000 })
+    return
+  }
+  form.value.capacidad = nombre
+  capacidadRapidaVisible.value = false
+  toast.add({ severity: 'success', summary: 'Capacidad creada', detail: `${nombre} fue creada y seleccionada`, life: 2500 })
 }
 
 function abrirEditar(recibido: any) {
@@ -276,6 +487,7 @@ function abrirEditar(recibido: any) {
     nota_json: JSON.stringify(nd),
   }
   clienteSeleccionadoBusqueda.value = null
+  tabRecibidoActivo.value = 0
   dialogVisible.value = true
   selectedRecibido.value = recibido
 }
@@ -473,28 +685,34 @@ async function guardarRecibir() {
     return
   }
 
+  const cliente = notaData.value
+  if (!String(cliente.customer_name || '').trim()) {
+    tabRecibidoActivo.value = 1
+    toast.add({ severity: 'warn', summary: 'Cliente requerido', detail: 'Selecciona un cliente o escribe el nombre del dueño del equipo', life: 4000 })
+    return
+  }
+
   try {
     const nd = JSON.parse(form.value.nota_json || '{}')
     const nombreCliente = (nd.customer_name || '').toUpperCase().trim()
-    let clienteId = ''
-    if (nombreCliente && !selectedRecibido.value) {
-      try {
-        const resCli = await window.db.getAll('clientes')
-        if (resCli.success) {
-          const existente = filterByAlmacen(resCli.data || []).find((c: any) => (c.nombre || '').toUpperCase() === nombreCliente)
-          if (existente) {
-            clienteId = String(existente.id)
-          } else {
-            const resNuevo = await window.db.insert('clientes', addAlmacenId({
-              nombre: nombreCliente,
-              telefono: nd.customer_phone || '',
-              cedula: nd.customer_cedula || '',
-              rnc: nd.customer_cedula || '',
-            }))
-            if (resNuevo.success) clienteId = String(resNuevo.data.id)
-          }
-        }
-      } catch {}
+    let clienteId = String(clienteSeleccionadoBusqueda.value?.id || nd.cliente_id || '')
+    const resCli = await window.db.getAll('clientes')
+    if (!resCli.success) throw new Error(resCli.error || 'No se pudo validar el cliente en TM Cloud')
+    const clientes = filterByAlmacen(resCli.data || [])
+    const existente = clienteId
+      ? clientes.find((item: any) => String(item.id) === clienteId)
+      : clientes.find((item: any) => (item.nombre || '').toUpperCase() === nombreCliente)
+    if (existente) {
+      clienteId = String(existente.id)
+    } else {
+      const resNuevo = await window.db.insert('clientes', addAlmacenId({
+        nombre: nombreCliente,
+        telefono: nd.customer_phone || '',
+        cedula: nd.customer_cedula || '',
+        rnc: nd.customer_cedula || '',
+      }))
+      if (!resNuevo.success || !resNuevo.data?.id) throw new Error(resNuevo.error || 'No se pudo crear el cliente en TM Cloud')
+      clienteId = String(resNuevo.data.id)
     }
     const data: any = {
       nombre: form.value.nombre.trim().toUpperCase(),
@@ -1020,13 +1238,7 @@ onMounted(async () => {
         </Column>
         <Column header="Acciones" style="width: 14rem">
           <template #body="{ data }">
-            <div class="flex gap-1 flex-wrap">
-              <Button icon="pi pi-file-minus" severity="success" text rounded size="small" v-tooltip="'Generar Nota de Credito'" @click.stop="abrirNotaCreditoDialog(data)" />
-              <Button icon="pi pi-wrench" severity="info" text rounded size="small" v-tooltip="'Enviar al Taller'" @click.stop="abrirTallerDialog(data)" />
-              <Button icon="pi pi-shopping-cart" severity="primary" text rounded size="small" v-tooltip="'Publicar en IMEI'" @click.stop="abrirPublicarImei(data)" />
-              <Button icon="pi pi-pencil" severity="info" text rounded size="small" v-tooltip="'Editar'" @click.stop="abrirEditar(data)" />
-              <Button icon="pi pi-trash" severity="danger" text rounded size="small" v-tooltip="'Eliminar'" @click.stop="confirmarBorrar(data)" />
-            </div>
+            <Button icon="pi pi-ellipsis-v" label="Acciones" severity="secondary" outlined size="small" :loading="pdfGenerandoId === Number(data.id)" @click.stop="abrirMenuAcciones($event, data)" />
           </template>
         </Column>
 
@@ -1082,12 +1294,8 @@ onMounted(async () => {
                 <span v-else class="text-surface-400">Sin NC</span>
               </div>
             </div>
-            <div class="flex gap-1 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700 flex-wrap">
-              <Button icon="pi pi-file-minus" severity="success" text rounded size="small" v-tooltip="'Generar NC'" @click.stop="abrirNotaCreditoDialog(recibido)" />
-              <Button icon="pi pi-wrench" severity="info" text rounded size="small" v-tooltip="'Taller'" @click.stop="abrirTallerDialog(recibido)" />
-              <Button icon="pi pi-shopping-cart" severity="primary" text rounded size="small" v-tooltip="'IMEI'" @click.stop="abrirPublicarImei(recibido)" />
-              <Button icon="pi pi-pencil" severity="info" text rounded size="small" v-tooltip="'Editar'" @click.stop="abrirEditar(recibido)" />
-              <Button icon="pi pi-trash" severity="danger" text rounded size="small" v-tooltip="'Eliminar'" @click.stop="confirmarBorrar(recibido)" />
+            <div class="mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
+              <Button icon="pi pi-ellipsis-v" label="Acciones" severity="secondary" outlined size="small" class="w-full" :loading="pdfGenerandoId === Number(recibido.id)" @click.stop="abrirMenuAcciones($event, recibido)" />
             </div>
           </div>
         </div>
@@ -1112,7 +1320,7 @@ onMounted(async () => {
       modal
       :style="{ width: 'min(48rem, 95vw)' }"
     >
-      <TabView>
+      <TabView v-model:activeIndex="tabRecibidoActivo">
         <TabPanel header="Equipo">
           <div class="flex flex-col gap-3 pt-2">
             <div class="flex flex-col gap-1">
@@ -1129,11 +1337,17 @@ onMounted(async () => {
             <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1">
                 <label class="text-sm font-semibold">Color</label>
-                <InputText v-model="form.color" placeholder="Color" class="uppercase" style="text-transform: uppercase;" />
+                <div class="flex items-center gap-2 min-w-0">
+                  <div class="flex-1 min-w-0 overflow-hidden"><ColorSelect v-model="form.color" class="w-full min-w-0" /></div>
+                  <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear color" @click="abrirColorRapido" v-tooltip="'Crear color'" />
+                </div>
               </div>
               <div class="flex flex-col gap-1">
                 <label class="text-sm font-semibold">Capacidad</label>
-                <InputText v-model="form.capacidad" placeholder="Ej: 128GB" class="uppercase" style="text-transform: uppercase;" />
+                <div class="flex items-center gap-2 min-w-0">
+                  <div class="flex-1 min-w-0 overflow-hidden"><CapacitySelect v-model="form.capacidad" class="w-full min-w-0" /></div>
+                  <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear capacidad" @click="abrirCapacidadRapida" v-tooltip="'Crear capacidad'" />
+                </div>
               </div>
             </div>
           </div>
@@ -1141,7 +1355,7 @@ onMounted(async () => {
         <TabPanel header="Cliente / Valor">
           <div class="flex flex-col gap-3 pt-2">
             <div class="flex flex-col gap-1">
-              <label class="text-sm font-semibold">Buscar Cliente Existente</label>
+              <label class="text-sm font-semibold">Buscar Cliente Existente <span class="text-red-500">*</span></label>
               <Select
                 v-model="clienteSeleccionadoBusqueda"
                 :options="clientesLista"
@@ -1176,7 +1390,7 @@ onMounted(async () => {
               </div>
             </div>
             <div class="flex flex-col gap-1">
-              <label class="text-sm font-semibold">Nombre del Cliente (dueño del equipo)</label>
+              <label class="text-sm font-semibold">Nombre del Cliente (dueño del equipo) <span class="text-red-500">*</span></label>
               <InputText :value="notaData.customer_name" @input="setCustomerName(($event.target as HTMLInputElement).value)" placeholder="Nombre completo" class="uppercase" style="text-transform: uppercase;" />
             </div>
             <div class="flex flex-col gap-1">
@@ -1197,7 +1411,7 @@ onMounted(async () => {
       </TabView>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="selectedRecibido ? 'Actualizar' : 'Recibir Equipo'" icon="pi pi-check" @click="guardarRecibir" />
+        <Button :label="selectedRecibido ? 'Actualizar' : 'Recibir Equipo'" icon="pi pi-check" :disabled="!notaData.customer_name.trim()" @click="guardarRecibir" />
       </template>
     </Dialog>
 
@@ -1256,39 +1470,44 @@ onMounted(async () => {
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="dialogPublicarImei" header="Publicar en Inventario (IMEI)" modal :style="{ width: '90%', maxWidth: '450px' }">
-      <div v-if="selectedRecibido" class="space-y-4 pt-2">
-        <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 text-sm">
-          <div class="flex justify-between">
+    <Dialog v-model:visible="dialogPublicarImei" header="Publicar en IMEI" modal :draggable="false" :style="{ width: '22rem', maxWidth: 'calc(100vw - 2rem)' }">
+      <div v-if="selectedRecibido" class="space-y-3 pt-1">
+        <div class="rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 p-3 text-sm space-y-1">
+          <div class="flex justify-between gap-3">
             <span class="text-surface-500">Modelo</span>
-            <span class="font-semibold">{{ getNombreTelefono(selectedRecibido.id_equi) || 'SIN MODELO' }}</span>
+            <span class="font-semibold text-right truncate">{{ getNombreTelefono(selectedRecibido.id_equi) || 'SIN MODELO' }}</span>
           </div>
-          <div class="flex justify-between">
+          <div class="flex justify-between gap-3">
             <span class="text-surface-500">IMEI</span>
-            <span class="font-semibold">{{ selectedRecibido.nombre || '—' }}</span>
+            <span class="font-mono font-semibold text-right">{{ selectedRecibido.nombre || '—' }}</span>
           </div>
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-sm font-semibold">Costo real del equipo (RD$)</label>
+          <label class="text-xs font-semibold">Costo real</label>
           <InputNumber v-model="imeiPublishForm.costo" mode="currency" :currency="systemCurrency" :locale="systemLocale" :min="0" fluid />
-          <p class="text-xs text-surface-400">Se toma del valor registrado cuando se recibió el celular.</p>
+          <p class="text-[11px] text-surface-400">Valor registrado al recibir el equipo.</p>
+        </div>
+        <div class="grid grid-cols-1 gap-2">
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-semibold">Precio de venta</label>
+          <div class="flex items-center gap-1 min-w-0">
+            <InputNumber v-model="imeiPublishForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" class="flex-1 min-w-0" fluid />
+            <Button icon="pi pi-copy" severity="secondary" outlined class="shrink-0" aria-label="Copiar precio de venta" @click="copiarPrecioVentaPublicacion" v-tooltip="'Copiar a precio mínimo y precio por mayor'" />
+          </div>
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-sm font-semibold">Precio de Venta (RD$)</label>
-          <InputNumber v-model="imeiPublishForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid />
-        </div>
-        <div class="flex flex-col gap-1">
-          <label class="text-sm font-semibold">Precio Minimo (RD$)</label>
+          <label class="text-xs font-semibold">Precio mínimo</label>
           <InputNumber v-model="imeiPublishForm.precio_min" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid />
         </div>
         <div class="flex flex-col gap-1">
-          <label class="text-sm font-semibold">Precio por Mayor (RD$)</label>
+          <label class="text-xs font-semibold">Precio por mayor</label>
           <InputNumber v-model="imeiPublishForm.precio_xmayor" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid />
+        </div>
         </div>
       </div>
       <template #footer>
-        <Button label="Cancelar" severity="secondary" text @click="dialogPublicarImei = false" />
-        <Button label="Publicar en IMEI" icon="pi pi-check" :loading="publicandoImei" @click="publicarComoImei" />
+        <Button label="Cancelar" severity="secondary" text size="small" @click="dialogPublicarImei = false" />
+        <Button label="Publicar" icon="pi pi-check" size="small" :loading="publicandoImei" @click="publicarComoImei" />
       </template>
     </Dialog>
 
@@ -1363,5 +1582,52 @@ onMounted(async () => {
         />
       </template>
     </Dialog>
+
+    <Dialog v-model:visible="colorRapidoVisible" header="Nuevo color" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-3 pt-2">
+        <div class="flex flex-col gap-1"><label class="font-semibold text-sm">Nombre</label><InputText v-model="colorRapidoNombre" placeholder="Ejemplo: AZUL MARINO" class="uppercase" fluid @keyup.enter="guardarColorRapido" /></div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Color visual</label>
+          <div class="flex items-center gap-3">
+            <input v-model="colorRapidoCodigo" type="color" class="w-14 h-11 rounded border border-surface-300 cursor-pointer bg-transparent p-1" />
+            <InputText v-model="colorRapidoCodigo" class="font-mono uppercase flex-1" maxlength="7" />
+            <span class="w-10 h-10 rounded-full border border-surface-300 shadow-sm" :style="{ backgroundColor: colorRapidoCodigo }"></span>
+          </div>
+        </div>
+      </div>
+      <template #footer><Button label="Cancelar" severity="secondary" text @click="colorRapidoVisible = false" /><Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!colorRapidoNombre.trim()" @click="guardarColorRapido" /></template>
+    </Dialog>
+
+    <Dialog v-model:visible="capacidadRapidaVisible" header="Nueva capacidad" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-2 pt-2">
+        <label class="font-semibold text-sm">Capacidad</label>
+        <InputText v-model="capacidadRapidaNombre" placeholder="Ejemplo: 128GB, 512GB, 220L" class="uppercase" fluid @keyup.enter="guardarCapacidadRapida" />
+        <small class="text-surface-500">Se guardará en mayúsculas y sin espacios.</small>
+      </div>
+      <template #footer><Button label="Cancelar" severity="secondary" text @click="capacidadRapidaVisible = false" /><Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!capacidadRapidaNombre.trim()" @click="guardarCapacidadRapida" /></template>
+    </Dialog>
+
+    <Dialog v-model:visible="pdfVisible" header="Comprobante profesional del recibido" modal :style="{ width: '92vw', height: '92vh' }" :draggable="false">
+      <iframe v-if="pdfUrl" :src="pdfUrl" title="Comprobante PDF del equipo recibido" class="w-full border-0 rounded-lg bg-white" style="height: 74vh"></iframe>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" text @click="pdfVisible = false" />
+        <Button label="Descargar PDF" icon="pi pi-download" severity="danger" @click="descargarPdfRecibido" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="buscadorImeiVisible" :header="`Buscar IMEI: ${recibidoAccion?.nombre || ''}`" modal :style="{ width: 'min(42rem, 95vw)' }">
+      <div v-if="buscandoImeiSistema" class="flex items-center justify-center gap-2 py-12 text-surface-400"><i class="pi pi-spin pi-spinner"></i><span>Buscando en todo el sistema...</span></div>
+      <div v-else-if="resultadosImeiSistema.length" class="flex flex-col gap-2 max-h-[28rem] overflow-y-auto py-2">
+        <button v-for="resultado in resultadosImeiSistema" :key="resultado.key" type="button" class="w-full flex items-center gap-3 p-3 rounded-xl border border-surface-200 dark:border-surface-700 text-left hover:border-primary-400 hover:bg-surface-50 dark:hover:bg-surface-700 cursor-pointer" @click="abrirResultadoImeiSistema(resultado)">
+          <span class="w-10 h-10 rounded-lg bg-surface-100 dark:bg-surface-700 grid place-items-center shrink-0"><i :class="resultado.icon"></i></span>
+          <span class="min-w-0 flex-1"><span class="block text-xs uppercase font-semibold text-surface-400">{{ resultado.origen }}</span><strong class="block truncate">{{ resultado.titulo }}</strong><small class="block truncate text-surface-500">{{ resultado.detalle }}</small></span>
+          <i class="pi pi-arrow-right text-surface-400"></i>
+        </button>
+      </div>
+      <div v-else class="text-center py-12 text-surface-400"><i class="pi pi-search text-3xl block mb-3"></i><p>No se encontró ese IMEI en el sistema.</p></div>
+      <template #footer><Button label="Cerrar" severity="secondary" text @click="buscadorImeiVisible = false" /></template>
+    </Dialog>
+
+    <Menu ref="actionMenu" :model="actionMenuItems" popup />
   </div>
 </template>

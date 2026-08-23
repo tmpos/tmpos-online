@@ -32,7 +32,7 @@ const motivo = ref('DANADO')
 const tipos = computed(() => [
   ...(systemMode.isCellphoneStore ? [{ label: 'IMEI', value: 'imei' }] : []),
   { label: systemMode.productLabel, value: 'accesorio' },
-  { label: 'Electrodomesticos', value: 'serial' },
+  { label: 'Electrónicos', value: 'serial' },
 ])
 
 const nombresTelefonos = computed(() => new Map(telefonos.value.map((item: any) => [Number(item.id), item.nombre])))

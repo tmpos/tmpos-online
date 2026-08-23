@@ -31,6 +31,9 @@ import { useAuthStore } from '@/stores/auth.store'
 import { getImageUrl } from '@/services/tmCloudClient'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
 import { matchesSearch } from '@/composables/useSearch'
+import ColorSelect from '@/components/shared/ColorSelect.vue'
+import CapacitySelect from '@/components/shared/CapacitySelect.vue'
+import PriceAdjustmentDialog from '@/components/inventario/PriceAdjustmentDialog.vue'
 
 const toast = useToast()
 const router = useRouter()
@@ -61,6 +64,8 @@ const estadoFiltro = ref(route.query.estado === 'todos' ? '' : 'DISPONIBLE')
 const telefonoFiltro = ref<any>(null)
 const verTodosAlmacenes = ref(false)
 const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
+const dialogAjustarPrecios = ref(false)
+const guardandoAjustePrecios = ref(false)
 const dialogAccionVenta = ref(false)
 const dialogClienteExpress = ref(false)
 const dialogNuevoClienteExpress = ref(false)
@@ -83,12 +88,22 @@ function reiniciarOtpEliminar() {
 }
 
 const imeiActionItems = computed(() => [
+  { label: 'Buscar IMEI en todo el sistema', icon: 'pi pi-search', command: () => imeiAccion.value && abrirBuscadorGlobalImei(imeiAccion.value) },
   { label: 'Vender o agregar al carrito', icon: 'pi pi-shopping-cart', command: () => imeiAccion.value && abrirAccionVenta(imeiAccion.value) },
   { label: 'Imprimir etiqueta', icon: 'pi pi-print', command: () => imeiAccion.value && abrirImprimirEtiquetaIndividual(imeiAccion.value) },
   { label: 'Editar IMEI', icon: 'pi pi-pencil', command: () => imeiAccion.value && abrirEditar(imeiAccion.value) },
   { separator: true },
   { label: 'Eliminar', icon: 'pi pi-trash', class: 'text-red-500', command: () => imeiAccion.value && confirmarBorrar(imeiAccion.value) },
 ])
+
+async function abrirBuscadorGlobalImei(imei: any) {
+  const valor = String(imei?.nombre || imei?.imei || '').trim()
+  if (valor.length < 3) {
+    toast.add({ severity: 'warn', summary: 'IMEI inválido', detail: 'Este registro no tiene un IMEI válido para buscar', life: 3500 })
+    return
+  }
+  await router.push({ path: '/', query: { buscar_imei: valor } })
+}
 
 function abrirMenuAccionesImei(event: Event, imei: any) {
   imeiAccion.value = imei
@@ -353,6 +368,30 @@ async function cargarImeis() {
     console.error(error)
   } finally {
     loading.value = false
+  }
+}
+
+async function aplicarAjustePrecios(cambios: Array<{ id: number; data: Record<string, number> }>) {
+  if (cambios.length === 0) {
+    toast.add({ severity: 'info', summary: 'Sin cambios', detail: 'No hay precios nuevos para guardar.', life: 2200 })
+    return
+  }
+  guardandoAjustePrecios.value = true
+  let actualizados = 0
+  try {
+    for (const cambio of cambios) {
+      const res = await window.db.update('imei', cambio.id, cambio.data)
+      if (!res.success) throw new Error(res.error || 'No se pudo actualizar un IMEI')
+      actualizados++
+    }
+    dialogAjustarPrecios.value = false
+    await cargarImeis()
+    toast.add({ severity: 'success', summary: 'Precios actualizados', detail: `${actualizados} IMEI(s) actualizados.`, life: 3000 })
+  } catch (error: any) {
+    await cargarImeis()
+    toast.add({ severity: 'error', summary: 'Actualización incompleta', detail: `${actualizados} actualizado(s). ${error?.message || 'Ocurrió un error.'}`, life: 4500 })
+  } finally {
+    guardandoAjustePrecios.value = false
   }
 }
 
@@ -1563,6 +1602,7 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
               <i class="pi pi-th-large"></i>
             </button>
           </div>
+          <Button label="Ajustar precios" icon="pi pi-percentage" severity="secondary" outlined @click="dialogAjustarPrecios = true" />
           <Button label="Nuevo IMEI" icon="pi pi-plus" @click="abrirCrear" />
           <Button label="Sin telefono" icon="pi pi-search" severity="help" @click="seleccionarImeisSinTelefono" v-tooltip="'Seleccionar IMEIs sin telefono o uid asignado'" />
           <Button label="Subir" icon="pi pi-upload" severity="info" :loading="sincronizandoSubir" @click="subirImeis" v-tooltip="'Subir IMEIs al servidor'" />
@@ -1572,6 +1612,7 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
 
       <div v-if="selectedImeis.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
         <span class="text-sm font-medium">{{ selectedImeis.length }} seleccionado(s)</span>
+        <Button label="Ajustar precios" icon="pi pi-percentage" severity="secondary" size="small" @click="dialogAjustarPrecios = true" />
         <Button label="Cambiar Estado" icon="pi pi-refresh" severity="info" size="small" @click="abrirCambiarEstadoMultiple" />
         <Button label="Reubicar en otro teléfono" icon="pi pi-mobile" severity="warn" size="small" @click="abrirCambiarEquipoMultiple" />
         <Button label="Color" icon="pi pi-palette" severity="help" size="small" @click="abrirCambiarColorMultiple" />
@@ -1859,11 +1900,11 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
         <div class="grid grid-cols-3 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
-            <InputText v-model="form.color" placeholder="Color" fluid class="uppercase" style="text-transform: uppercase;" />
+            <ColorSelect v-model="form.color" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
-            <InputText v-model="form.capacidad" placeholder="Ej: 128GB" fluid />
+            <CapacitySelect v-model="form.capacidad" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Bateria</label>
@@ -2138,7 +2179,7 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
     >
       <div class="space-y-4 pt-2">
         <p class="text-sm">Asignar nuevo color a <strong>{{ selectedImeis.length }}</strong> IMEI(s):</p>
-        <InputText v-model="nuevoColorMultiple" placeholder="Ej: NEGRO" fluid class="uppercase" style="text-transform: uppercase;" />
+        <ColorSelect v-model="nuevoColorMultiple" />
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioColorMultiple = false" />
@@ -2154,7 +2195,7 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
     >
       <div class="space-y-4 pt-2">
         <p class="text-sm">Asignar nueva capacidad a <strong>{{ selectedImeis.length }}</strong> IMEI(s):</p>
-        <InputText v-model="nuevaCapacidadMultiple" placeholder="Ej: 128GB" fluid class="uppercase" style="text-transform: uppercase;" />
+        <CapacitySelect v-model="nuevaCapacidadMultiple" />
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogCambioCapacidadMultiple = false" />
@@ -2268,6 +2309,18 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
         <Button label="Cancelar" severity="secondary" text @click="dialogSeleccionarPlantilla = false" />
       </template>
     </Dialog>
+
+    <PriceAdjustmentDialog
+      v-model:visible="dialogAjustarPrecios"
+      :items="imeis"
+      :selected-items="selectedImeis"
+      item-label="IMEI(s)"
+      :scope-label="verTodosAlmacenes ? 'conjunto de todos los almacenes' : 'almacén activo'"
+      :currency="systemCurrency"
+      :locale="systemLocale"
+      :loading="guardandoAjustePrecios"
+      @apply="aplicarAjustePrecios"
+    />
 
     <TicketFacturaPrint ref="ticketPrintRef" />
 

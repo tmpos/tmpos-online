@@ -1,24 +1,33 @@
 # TMPOS Desktop
 
-[![Versión](https://img.shields.io/badge/versión-2.13.12-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.12)
-[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.13.12/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.12)
+[![Versión](https://img.shields.io/badge/versión-2.13.13-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.13)
+[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.13.13/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.13)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows)](https://github.com/tmpos/tmpos-online/releases/latest)
 
 Sistema profesional de punto de venta, inventario, facturación, taller y administración comercial, con funcionamiento offline y sincronización mediante TMCloud.
 
 ## Descargar TMPOS para Windows
 
-[![Descargar la última release](https://img.shields.io/badge/Descargar_ultima_release-v2.13.12-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/latest/download/TMPOS.Setup.2.13.12.exe)
+[![Descargar la última release](https://img.shields.io/badge/Descargar_ultima_release-v2.13.13-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/latest/download/TMPOS.Setup.2.13.13.exe)
 
 El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos existentes se conservan durante la actualización.
 
 ## Descargar TMPOS para macOS
 
-[![Descargar TMPOS v2.13.9 para macOS](https://img.shields.io/badge/Descargar_TMPOS-v2.13.9_macOS-111827?style=for-the-badge&logo=apple)](https://github.com/tmpos/tmpos-online/releases/download/v2.13.9/TMPOS-2.13.9-x64.dmg)
+[![Descargar TMPOS v2.13.13 para macOS](https://img.shields.io/badge/Descargar_TMPOS-v2.13.13_macOS-111827?style=for-the-badge&logo=apple)](https://github.com/tmpos/tmpos-online/releases/download/v2.13.13/TMPOS-2.13.13-x64.dmg)
 
 Compatible con Macs Intel de 64 bits. Al no estar notarizada esta compilación, la primera apertura puede requerir clic derecho sobre TMPOS, seleccionar **Abrir** y confirmar.
 
-También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-online/releases/download/v2.13.9/TMPOS-2.13.9-x64.zip).
+También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-online/releases/download/v2.13.13/TMPOS-2.13.13-x64.zip).
+
+## Novedades de v2.13.13
+
+- Inventario online ampliado con colores, capacidades, electrónicos y ajustes masivos de precios para accesorios, IMEI y seriales.
+- Órdenes de taller renovadas con acciones compactas, piezas facturables, precio técnico y pagos individuales o múltiples.
+- Historial de técnicos con órdenes pagadas y pendientes, filtros por fecha, totales y PDF integrado.
+- Cambio de licencia reforzado para limpiar los datos anteriores y cargar inmediatamente la nueva empresa.
+- Usuarios sincronizados desde TM Cloud y protección contra PIN duplicados.
+- Mejoras en recibidos, búsqueda global, PDF profesional, caja, cuadres y reportes.
 
 ## Novedades de v2.13.12
 
@@ -144,7 +153,7 @@ También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/t
 
 ## Actualización
 
-1. Descarga `TMPOS.Setup.2.13.12.exe`.
+1. Descarga `TMPOS.Setup.2.13.13.exe`.
 2. Cierra TMPOS si está abierto.
 3. Ejecuta el instalador y conserva la ubicación actual.
 4. Abre TMPOS normalmente; tus datos locales permanecerán disponibles.

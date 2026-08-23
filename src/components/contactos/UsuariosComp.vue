@@ -14,6 +14,7 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAuthStore } from '@/stores/auth.store'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
+import { ensureConfigLoaded, fetchTable } from '@/services/tmCloudClient'
 
 import { envioElectron } from '@/funciones/funciones.js'
 
@@ -35,6 +36,7 @@ const selectedUsuario = ref<any>(null)
 const selectedUsuarios = ref<any[]>([])
 const usuariosPendientesEliminar = ref<any[]>([])
 const busqueda = ref('')
+const pinDuplicado = ref(false)
 
 const roles = computed(() => {
   return [
@@ -116,16 +118,58 @@ async function cargarUsuarios() {
   }
 }
 
+function identificadoresUsuario(usuario: any): string[] {
+  return [
+    usuario?.uid,
+    usuario?.identificadordb,
+    usuario?.email,
+    usuario?.usuario,
+  ]
+    .map(valor => String(valor || '').trim().toLowerCase())
+    .filter(Boolean)
+}
+
+async function agregarUsuariosRemotosFaltantes(): Promise<number> {
+  if (!isOnline()) return 0
+  await ensureConfigLoaded()
+  const [resLocal, remotos] = await Promise.all([
+    window.db.getAll('usuarios'),
+    fetchTable('usuarios'),
+  ])
+  if (!resLocal.success || remotos.length === 0) return 0
+
+  const identificadoresLocales = new Set(
+    (resLocal.data || []).flatMap((usuario: any) => identificadoresUsuario(usuario)),
+  )
+  let agregados = 0
+  for (const remoto of remotos) {
+    const identificadores = identificadoresUsuario(remoto)
+    if (identificadores.some(id => identificadoresLocales.has(id))) continue
+    const normalizado = Object.fromEntries(
+      Object.entries(remoto)
+        .filter(([key]) => key !== 'id')
+        .map(([key, value]) => [key, value !== null && typeof value === 'object' ? JSON.stringify(value) : value]),
+    )
+    const res = await window.electron.invoke('db:insertCloud', 'usuarios', normalizado) as any
+    if (!res?.success) throw new Error(res?.error || `No se pudo importar ${remoto.nombre || remoto.email || 'un usuario'}`)
+    identificadores.forEach(id => identificadoresLocales.add(id))
+    agregados++
+  }
+  return agregados
+}
+
 function abrirCrear() {
   isEditing.value = false
   selectedUsuario.value = null
   form.value = formDefault()
+  pinDuplicado.value = false
   dialogVisible.value = true
 }
 
 function abrirEditar(usuario: any) {
   isEditing.value = true
   selectedUsuario.value = usuario
+  pinDuplicado.value = false
   form.value = {
     nombre: usuario.nombre || '',
     usuario: usuario.email || '',
@@ -230,6 +274,8 @@ function normalizarPin(event: Event) {
   const valor = input.value.replace(/\D/g, '').slice(0, 4)
   input.value = valor
   form.value.pin = valor
+  pinDuplicado.value = false
+  if (valor.length === 4) void verificarPinDisponible()
 }
 
 function bloquearPinNoNumerico(event: KeyboardEvent) {
@@ -237,6 +283,30 @@ function bloquearPinNoNumerico(event: KeyboardEvent) {
   if (teclasPermitidas.includes(event.key)) return
   if (!/^\d$/.test(event.key) || form.value.pin.length >= 4) {
     event.preventDefault()
+  }
+}
+
+async function existePinEnOtroUsuario(pin: string): Promise<boolean> {
+  const pinNormalizado = String(pin || '').replace(/\D/g, '')
+  const res = await window.db.getAll('usuarios')
+  if (!res.success) throw new Error(res.error || 'No se pudo verificar el PIN')
+  return (res.data || []).some((usuario: any) =>
+    Number(usuario.id) !== Number(isEditing.value ? selectedUsuario.value?.id : 0) &&
+    String(usuario.pin || '').replace(/\D/g, '') === pinNormalizado
+  )
+}
+
+async function verificarPinDisponible() {
+  if (form.value.pin.length !== 4) {
+    pinDuplicado.value = false
+    return
+  }
+  const pinVerificado = form.value.pin
+  try {
+    const duplicado = await existePinEnOtroUsuario(pinVerificado)
+    if (form.value.pin === pinVerificado) pinDuplicado.value = duplicado
+  } catch {
+    pinDuplicado.value = false
   }
 }
 
@@ -253,6 +323,17 @@ async function guardar() {
 
   if (form.value.pin.length !== 4) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El PIN debe tener 4 digitos', life: 3000 })
+    return
+  }
+
+  try {
+    if (await existePinEnOtroUsuario(form.value.pin)) {
+      pinDuplicado.value = true
+      toast.add({ severity: 'warn', summary: 'PIN no disponible', detail: 'Este PIN ya pertenece a otro usuario. Utiliza uno diferente.', life: 4000 })
+      return
+    }
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'No se pudo verificar el PIN', detail: error?.message || 'Inténtalo nuevamente.', life: 3500 })
     return
   }
 
@@ -378,6 +459,15 @@ onMounted(async () => {
     console.error('Error cargando configuracion:', error)
   }
 
+  try {
+    const agregados = await agregarUsuariosRemotosFaltantes()
+    if (agregados > 0) {
+      toast.add({ severity: 'success', summary: 'Usuarios sincronizados', detail: `${agregados} usuario(s) faltante(s) fueron agregados desde TM Cloud.`, life: 3000 })
+    }
+  } catch (error: any) {
+    console.error('Error verificando usuarios remotos:', error)
+    toast.add({ severity: 'warn', summary: 'Sincronización de usuarios', detail: error?.message || 'No se pudieron verificar los usuarios online.', life: 3500 })
+  }
   await cargarUsuarios()
 })
 </script>
@@ -539,7 +629,10 @@ onMounted(async () => {
             maxlength="4"
             @keydown="bloquearPinNoNumerico"
             @input="normalizarPin"
+            @blur="verificarPinDisponible"
+            :invalid="pinDuplicado"
           />
+          <small v-if="pinDuplicado" class="text-red-500">Este PIN ya pertenece a otro usuario.</small>
         </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Rol</label>
@@ -549,7 +642,7 @@ onMounted(async () => {
 
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="pinDuplicado" @click="guardar" />
       </template>
     </Dialog>
 

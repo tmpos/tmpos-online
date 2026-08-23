@@ -179,14 +179,24 @@ function getOnlineCloudCredentials(): { baseUrl: string; key: string } | null {
 async function onlineCloudRequest(pathname: string, init: RequestInit = {}): Promise<any> {
   const cloud = getOnlineCloudCredentials()
   if (!cloud) throw new Error('TM Cloud no esta configurado. Configuralo para usar el sistema.')
-  const response = await fetch(`${cloud.baseUrl}${pathname}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${cloud.key}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) },
-    signal: AbortSignal.timeout(45000),
-  })
-  const value = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(value?.error || value?.message || `TM Cloud respondio HTTP ${response.status}`)
-  return value
+  const maxAttempts = 4
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const response = await fetch(`${cloud.baseUrl}${pathname}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${cloud.key}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) },
+      signal: AbortSignal.timeout(45000),
+    })
+    const value = await response.json().catch(() => ({}))
+    if (response.ok) return value
+    const message = String(value?.error?.message || value?.error || value?.message || `TM Cloud respondio HTTP ${response.status}`)
+    const databaseBusy = /database\s+is\s+locked|sqlstate\[hy000\].*(?:error:\s*5|database\s+is\s+locked)|sqlite_busy/i.test(message)
+    if (databaseBusy && attempt < maxAttempts - 1) {
+      await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
+      continue
+    }
+    throw new Error(message)
+  }
+  throw new Error('TM Cloud no pudo completar la operacion')
 }
 
 function validOnlineTable(value: unknown): string {
@@ -428,6 +438,27 @@ async function callOnlineRuntime(action: string, data: Record<string, any>): Pro
   if (['db/getAll', 'db/getWhere', 'db/getModified', 'db/getById', 'db/insert', 'db/update', 'db/delete'].includes(action)) {
     try { return await handleOnlineDbAction(action, data) }
     catch (error: any) { return { success: false, error: error?.message || 'No se pudo consultar TM Cloud' } }
+  }
+  if (action === 'invoke' && ['caja:getTurnoActivo', 'caja:getTurnoAbierto'].includes(String(data?.channel || ''))) {
+    try {
+      const almacenUid = String(data?.args?.[0] || '')
+      const rows = await fetchOnlineTable('caja_turnos')
+      const row = rows.find(item =>
+        String(item.estado || '').toLowerCase() === 'abierto' &&
+        (!almacenUid || String(item.almacen_uid || '') === almacenUid),
+      ) || null
+      return { success: true, data: row }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'No se pudo consultar el turno de caja' }
+    }
+  }
+  if (action === 'invoke' && String(data?.channel || '') === 'caja:abrirTurno') {
+    try { return await handleOnlineDbAction('db/insert', { tabla: 'caja_turnos', data: data?.args?.[0] || {} }) }
+    catch (error: any) { return { success: false, error: error?.message || 'No se pudo abrir el turno' } }
+  }
+  if (action === 'invoke' && String(data?.channel || '') === 'caja:cerrarTurno') {
+    try { return await handleOnlineDbAction('db/update', { tabla: 'caja_turnos', id: data?.args?.[0], data: { ...(data?.args?.[1] || {}), estado: 'cerrado' } }) }
+    catch (error: any) { return { success: false, error: error?.message || 'No se pudo cerrar el turno' } }
   }
   const cloud = getOnlineCloudCredentials()
   if (!cloud) return { success: false, error: 'TM Cloud no esta configurado. Configuralo para usar el sistema.' }
@@ -715,7 +746,7 @@ function initDatabase(): void {
     tecnicos: { tipo_comision: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision: 'REAL DEFAULT 0' },
     facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', canal_venta: "TEXT DEFAULT ''", ncf: "TEXT DEFAULT ''", tipo_comprobante: "TEXT DEFAULT ''", comprobante_id: 'INTEGER DEFAULT 0', referencia_origen: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
-    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", beneficio_empresa: 'REAL DEFAULT 0', beneficio_tecnico: 'REAL DEFAULT 0', porcentaje_tecnico: 'REAL DEFAULT 0', tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", almacen_id: 'INTEGER DEFAULT 0' },
+    ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", beneficio_empresa: 'REAL DEFAULT 0', beneficio_tecnico: 'REAL DEFAULT 0', porcentaje_tecnico: 'REAL DEFAULT 0', tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", fecha_pago_tecnico: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     cuentas_cobrar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     cuentas_pagar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     gastos: { turno_id: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
@@ -2214,6 +2245,34 @@ function setupIpcHandlers(): void {
       return { success: true, data: { resultados, errores } }
     } catch (error: any) {
       return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('db:resetForLicenseChange', async () => {
+    try {
+      // La licencia validada y las credenciales del nuevo proyecto son el
+      // bootstrap necesario para volver a descargar. Todo lo demas pertenece
+      // a la instalacion anterior y debe desaparecer antes de importar datos.
+      const preserved = new Set(['licencia', 'tmcloud_config', 'schema_migrations', 'sqlite_sequence'])
+      const tables = db!.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as { name: string }[]
+      const results: Array<{ table: string; deleted: number }> = []
+      db!.pragma('foreign_keys = OFF')
+      try {
+        const reset = db!.transaction(() => {
+          for (const { name } of tables) {
+            if (preserved.has(name)) continue
+            const deleted = db!.prepare(`DELETE FROM "${name}"`).run()
+            db!.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(name)
+            results.push({ table: name, deleted: Number(deleted.changes || 0) })
+          }
+        })
+        reset()
+      } finally {
+        db!.pragma('foreign_keys = ON')
+      }
+      return { success: true, data: { results } }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'No se pudo limpiar la base local' }
     }
   })
 
@@ -5373,10 +5432,9 @@ function setupIpcHandlers(): void {
       if (baseUrl && secretKey && /^https?:\/\//i.test(baseUrl)) {
         try {
           // /mail/send trabaja con plantillas registradas. En proyectos nuevos,
-          // la primera solicitud tambien inicializa las tablas internas de la
-          // cola y puede responder "Table not found" antes de completar ese
-          // primer envio. Repetir solo ese error permite que la API termine su
-          // migracion sin ocultar otros fallos ni depender de tablas locales.
+          // la primera solicitud puede inicializar las tablas internas; ademas,
+          // SQLite puede responder BUSY mientras otro envio confirma su cola.
+          // Ambos casos son transitorios y se reintentan exclusivamente por API.
           const mailPayload = {
             template: 'cash_closing',
             to: toEmail,
@@ -5385,7 +5443,8 @@ function setupIpcHandlers(): void {
           }
           let response: Response | null = null
           let responseData: any = {}
-          for (let attempt = 0; attempt < 2; attempt++) {
+          const maxAttempts = 4
+          for (let attempt = 0; attempt < maxAttempts; attempt++) {
             response = await fetch(`${baseUrl}/mail/send`, {
               method: 'POST',
               headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -5395,8 +5454,9 @@ function setupIpcHandlers(): void {
             responseData = await response.json().catch(() => ({})) as any
             if (response.ok) break
             const message = String(responseData?.error?.message || responseData?.error || responseData?.message || '')
-            if (attempt === 0 && /table\s+not\s+found|tabla.+no\s+(?:existe|encontr)/i.test(message)) {
-              await new Promise(resolve => setTimeout(resolve, 350))
+            const transient = /table\s+not\s+found|tabla.+no\s+(?:existe|encontr)|database\s+is\s+locked|sqlstate\[hy000\].*(?:error:\s*5|database\s+is\s+locked)|sqlite_busy/i.test(message)
+            if (attempt < maxAttempts - 1 && transient) {
+              await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
               continue
             }
             break
@@ -5432,44 +5492,9 @@ function setupIpcHandlers(): void {
         apiError = 'TM Cloud no tiene URL y Secret Key configuradas'
       }
 
-      // Respaldo local: si TMPBASE no responde, intentar el SMTP configurado
-      // para que el cierre del turno no se quede sin entregar.
-      const config = getOtpEmailConfig()
-      if (!config.email || !config.password) {
-        return {
-          success: false,
-          error: `${apiError}. El SMTP de respaldo tampoco esta configurado.`,
-        }
-      }
-      if (!payload?.html) return { success: false, error: `${apiError}. El reporte de cierre esta vacio.` }
-
-      const attempts = getSmtpAttempts(config)
-      let lastError: any = null
-      for (const attempt of attempts) {
-        try {
-          await sendEmail(
-            toEmail,
-            String(payload.subject || 'Cierre de caja'),
-            String(payload.html),
-            attempt.host,
-            attempt.port,
-            attempt.secure,
-            config
-          )
-          return {
-            success: true,
-            provider: 'SMTP local (respaldo)',
-            warning: apiError,
-            message: `Cierre enviado a ${toEmail} por SMTP de respaldo`,
-            toEmail,
-          }
-        } catch (e: any) {
-          lastError = e
-        }
-      }
       return {
         success: false,
-        error: `TMPBASE: ${apiError}. SMTP: ${lastError?.message || 'Error desconocido'}`,
+        error: `No se pudo enviar el cierre mediante TMPBASE API: ${apiError}`,
       }
     } catch (e: any) {
       return { success: false, error: e.message || 'Error al enviar el cierre de caja' }
@@ -5603,7 +5628,9 @@ async function startLocalServer() {
   try {
     const port = await findFreePort()
     const distDir = path.join(__dirname, '../dist')
-    if (!fs.existsSync(distDir)) { console.warn('[Server] dist/ no encontrado, servidor no iniciado'); return }
+    // En desarrollo el renderer se sirve desde Vite y dist/ todavia no existe,
+    // pero el proxy de TM Cloud sigue siendo necesario para evitar CORS.
+    if (!fs.existsSync(distDir)) console.warn('[Server] dist/ no encontrado; se inicia solo el proxy local')
 
     const server = http.createServer(async (req, res) => {
       res.setHeader('Access-Control-Allow-Origin', '*')

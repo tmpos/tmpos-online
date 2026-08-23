@@ -110,7 +110,7 @@ const cantidadActual = ref(0)
 
 const tablasInventario = computed(() => [
   { label: systemMode.productLabel, value: 'accesorios' },
-  { label: 'Electrodomesticos', value: 'electrodomesticos' },
+  { label: 'Electrónicos', value: 'electrodomesticos' },
   { label: 'Piezas Taller', value: 'piezas' },
 ])
 

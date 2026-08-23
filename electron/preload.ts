@@ -19,6 +19,10 @@ const ONLINE_ONLY_LOCAL_CHANNELS = new Set([
   'facturas:solicitarOtpEliminar',
   'facturas:confirmarOtpEliminar',
 ])
+const LOCAL_SCHEMA_ACTIONS = new Set([
+  'tableExists', 'getTableColumns', 'crearTabla', 'addColumnToTable',
+  'eliminarTabla', 'getAllTables',
+])
 const ONLINE_ONLY_LOCAL_PREFIXES = [
   'tmcloud:', 'licencia:', 'otp-local:', 'print:', 'printer:', 'pdf:', 'save:',
   'clipboard:', 'openai:', 'imei:', 'app:', 'update:',
@@ -61,7 +65,7 @@ contextBridge.exposeInMainWorld('electron', {
     }
     const dbAction = channel.startsWith('db:') ? onlineDbAction(channel, args) : null
     if (dbAction && !isOnlineLocalTable(args[0])) return ipcRenderer.invoke('online:runtime', dbAction.action, dbAction.data)
-    if (channel === 'consultaservidor' && args[0] !== 'getAllConfig') {
+    if (channel === 'consultaservidor' && args[0] !== 'getAllConfig' && !LOCAL_SCHEMA_ACTIONS.has(String(args[0] || ''))) {
       return ipcRenderer.invoke('online:runtime', 'invoke', { channel, args })
     }
     if (!channel.startsWith('db:') && channel !== 'consultaservidor' && !isOnlineLocalChannel(channel)) {

@@ -72,6 +72,17 @@ const dialogMoverAlmacenMulti = ref(false)
 const almacenDestinoMulti = ref<any>(null)
 const almacenesDestinoMulti = ref<any[]>([])
 const moviendoAlmacenMulti = ref(false)
+const dialogAjustarPrecios = ref(false)
+const modoAjustePrecio = ref<'porcentaje' | 'manual'>('porcentaje')
+const direccionPorcentaje = ref<'aumentar' | 'disminuir'>('aumentar')
+const porcentajePrecio = ref<number | null>(null)
+const preciosManuales = ref<Record<number, number>>({})
+const preciosMinManuales = ref<Record<number, number>>({})
+const preciosMayorManuales = ref<Record<number, number>>({})
+const afectarPrecioMin = ref(false)
+const afectarPrecioMayor = ref(false)
+const alcanceAjustePrecio = ref<'todos' | 'seleccionados'>('todos')
+const guardandoPrecios = ref(false)
 
 const camposArray = ['nombre', 'codigo_barra', 'costo', 'precio_venta', 'precio_min', 'precio_xmayor', 'cantidad', 'alerta', 'marca', 'categoria', 'proveedor_id']
 
@@ -113,6 +124,83 @@ const accesoriosFiltrados = computed(() => {
     a.marca_nombre?.toLowerCase().includes(texto)
   )
 })
+const accesoriosObjetivoPrecio = computed(() =>
+  alcanceAjustePrecio.value === 'seleccionados' ? selectedAccesorios.value : accesorios.value
+)
+
+function abrirAjustePrecios() {
+  modoAjustePrecio.value = 'porcentaje'
+  direccionPorcentaje.value = 'aumentar'
+  porcentajePrecio.value = null
+  preciosManuales.value = Object.fromEntries(
+    accesorios.value.map((accesorio: any) => [Number(accesorio.id), Number(accesorio.precio_venta || 0)])
+  )
+  preciosMinManuales.value = Object.fromEntries(
+    accesorios.value.map((accesorio: any) => [Number(accesorio.id), Number(accesorio.precio_min || 0)])
+  )
+  preciosMayorManuales.value = Object.fromEntries(
+    accesorios.value.map((accesorio: any) => [Number(accesorio.id), Number(accesorio.precio_xmayor || 0)])
+  )
+  afectarPrecioMin.value = false
+  afectarPrecioMayor.value = false
+  alcanceAjustePrecio.value = 'todos'
+  dialogAjustarPrecios.value = true
+}
+
+async function guardarAjustePrecios() {
+  const porcentaje = Number(porcentajePrecio.value || 0)
+  if (modoAjustePrecio.value === 'porcentaje' && porcentaje <= 0) {
+    toast.add({ severity: 'warn', summary: 'Porcentaje requerido', detail: 'Indica un porcentaje mayor que cero.', life: 2500 })
+    return
+  }
+
+  const cambios = accesoriosObjetivoPrecio.value
+    .map((accesorio: any) => {
+      const precioActual = Number(accesorio.precio_venta || 0)
+      const precioMinActual = Number(accesorio.precio_min || 0)
+      const precioMayorActual = Number(accesorio.precio_xmayor || 0)
+      const factor = direccionPorcentaje.value === 'aumentar' ? 1 + porcentaje / 100 : 1 - porcentaje / 100
+      const precioNuevo = modoAjustePrecio.value === 'porcentaje'
+        ? Math.max(0, Math.round(precioActual * factor * 100) / 100)
+        : Math.max(0, Number(preciosManuales.value[Number(accesorio.id)] ?? precioActual))
+      const precioMinNuevo = !afectarPrecioMin.value ? precioMinActual : modoAjustePrecio.value === 'porcentaje'
+        ? Math.max(0, Math.round(precioMinActual * factor * 100) / 100)
+        : Math.max(0, Number(preciosMinManuales.value[Number(accesorio.id)] ?? precioMinActual))
+      const precioMayorNuevo = !afectarPrecioMayor.value ? precioMayorActual : modoAjustePrecio.value === 'porcentaje'
+        ? Math.max(0, Math.round(precioMayorActual * factor * 100) / 100)
+        : Math.max(0, Number(preciosMayorManuales.value[Number(accesorio.id)] ?? precioMayorActual))
+      return { accesorio, precioActual, precioNuevo, precioMinActual, precioMinNuevo, precioMayorActual, precioMayorNuevo }
+    })
+    .filter(({ precioActual, precioNuevo, precioMinActual, precioMinNuevo, precioMayorActual, precioMayorNuevo }) =>
+      precioActual !== precioNuevo || precioMinActual !== precioMinNuevo || precioMayorActual !== precioMayorNuevo
+    )
+
+  if (cambios.length === 0) {
+    toast.add({ severity: 'info', summary: 'Sin cambios', detail: 'No hay precios nuevos para guardar.', life: 2200 })
+    return
+  }
+
+  guardandoPrecios.value = true
+  let actualizados = 0
+  try {
+    for (const { accesorio, precioNuevo, precioMinNuevo, precioMayorNuevo } of cambios) {
+      const data: Record<string, number> = { precio_venta: precioNuevo }
+      if (afectarPrecioMin.value) data.precio_min = precioMinNuevo
+      if (afectarPrecioMayor.value) data.precio_xmayor = precioMayorNuevo
+      const res = await window.db.update('accesorios', accesorio.id, data)
+      if (!res.success) throw new Error(res.error || `No se pudo actualizar ${accesorio.nombre}`)
+      actualizados++
+    }
+    dialogAjustarPrecios.value = false
+    await cargarAccesorios()
+    toast.add({ severity: 'success', summary: 'Precios actualizados', detail: `${actualizados} precio(s) fueron actualizados.`, life: 3000 })
+  } catch (error: any) {
+    await cargarAccesorios()
+    toast.add({ severity: 'error', summary: 'Actualización incompleta', detail: `${actualizados} precio(s) actualizados. ${error?.message || 'Ocurrió un error.'}`, life: 4500 })
+  } finally {
+    guardandoPrecios.value = false
+  }
+}
 
 const printerOptions = computed(() =>
   printers.value.map((p: any) => ({
@@ -807,12 +895,14 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
               <i class="pi pi-th-large"></i>
             </button>
           </div>
+          <Button label="Ajustar precios" icon="pi pi-percentage" severity="secondary" outlined @click="abrirAjustePrecios" />
           <Button :label="systemMode.isGeneralStore ? 'Nuevo Producto' : 'Nuevo Accesorio'" icon="pi pi-plus" @click="abrirCrear" />
         </div>
       </div>
 
       <div v-if="selectedAccesorios.length > 0" class="flex items-center gap-2 p-2 mb-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
         <span class="text-sm font-medium">{{ selectedAccesorios.length }} seleccionado(s)</span>
+        <Button label="Ajustar precios" icon="pi pi-percentage" severity="secondary" size="small" @click="abrirAjustePrecios(); alcanceAjustePrecio = 'seleccionados'" />
         <Button label="Cambiar Proveedor" icon="pi pi-truck" severity="info" size="small" @click="abrirCambioProveedorMulti" />
         <Button label="Cambiar Almacen" icon="pi pi-warehouse" severity="success" size="small" @click="abrirMoverAlmacenMulti" />
         <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" @click="confirmarBorrarMultiple" />
@@ -1187,6 +1277,87 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogNuevaCategoria = false" />
         <Button label="Crear" icon="pi pi-check" :disabled="!nuevaCategoria.trim()" @click="crearCategoria" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogAjustarPrecios" header="Ajustar precios de venta" modal :style="{ width: 'min(46rem, 94vw)' }" :closable="!guardandoPrecios">
+      <div class="space-y-4 pt-2">
+        <div class="grid grid-cols-2 gap-2 rounded-xl bg-surface-100 dark:bg-surface-800 p-1">
+          <Button label="Por porcentaje" icon="pi pi-percentage" :severity="modoAjustePrecio === 'porcentaje' ? 'primary' : 'secondary'" :text="modoAjustePrecio !== 'porcentaje'" @click="modoAjustePrecio = 'porcentaje'" />
+          <Button label="Precio fijo manual" icon="pi pi-pencil" :severity="modoAjustePrecio === 'manual' ? 'primary' : 'secondary'" :text="modoAjustePrecio !== 'manual'" @click="modoAjustePrecio = 'manual'" />
+        </div>
+
+        <p class="text-sm text-surface-500">
+          Se actualizarán los {{ accesorios.length }} {{ systemMode.isGeneralStore ? 'productos' : 'accesorios' }} visibles del {{ verTodosAlmacenes ? 'conjunto de todos los almacenes' : 'almacén activo' }}.
+        </p>
+
+        <div class="space-y-1.5">
+          <label class="text-sm font-medium">Aplicar a</label>
+          <Select
+            v-model="alcanceAjustePrecio"
+            :options="[
+              { label: `Todos (${accesorios.length})`, value: 'todos' },
+              { label: `Solo seleccionados (${selectedAccesorios.length})`, value: 'seleccionados', disabled: selectedAccesorios.length === 0 },
+            ]"
+            optionLabel="label"
+            optionValue="value"
+            optionDisabled="disabled"
+            fluid
+          />
+          <p class="text-xs text-surface-500">Se modificarán <strong>{{ accesoriosObjetivoPrecio.length }}</strong> registro(s).</p>
+        </div>
+
+        <div class="flex flex-wrap gap-3">
+          <label class="flex flex-1 min-w-48 items-center justify-between gap-3 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer">
+            <span class="text-sm font-medium">Afectar precio mínimo</span>
+            <ToggleSwitch v-model="afectarPrecioMin" />
+          </label>
+          <label class="flex flex-1 min-w-48 items-center justify-between gap-3 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer">
+            <span class="text-sm font-medium">Afectar precio al por mayor</span>
+            <ToggleSwitch v-model="afectarPrecioMayor" />
+          </label>
+        </div>
+
+        <div v-if="modoAjustePrecio === 'porcentaje'" class="grid sm:grid-cols-2 gap-4">
+          <div class="space-y-1.5">
+            <label class="text-sm font-medium">Operación</label>
+            <Select v-model="direccionPorcentaje" :options="[{ label: 'Aumentar', value: 'aumentar' }, { label: 'Disminuir', value: 'disminuir' }]" optionLabel="label" optionValue="value" fluid />
+          </div>
+          <div class="space-y-1.5">
+            <label class="text-sm font-medium">Porcentaje</label>
+            <InputNumber v-model="porcentajePrecio" suffix=" %" :min="0.01" :max="100" :minFractionDigits="0" :maxFractionDigits="2" fluid @keyup.enter="guardarAjustePrecios" />
+          </div>
+          <div class="sm:col-span-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-3 text-sm text-blue-700 dark:text-blue-300">
+            Ejemplo: un precio de {{ $formatMoney(1000) }} quedará en
+            <strong>{{ $formatMoney(direccionPorcentaje === 'aumentar' ? 1000 * (1 + Number(porcentajePrecio || 0) / 100) : 1000 * (1 - Number(porcentajePrecio || 0) / 100)) }}</strong>.
+          </div>
+        </div>
+
+        <DataTable v-else :value="accesoriosObjetivoPrecio" scrollable scrollHeight="24rem" stripedRows size="small" dataKey="id">
+          <Column field="nombre" header="Nombre" />
+          <Column header="Precio actual" style="width: 9rem">
+            <template #body="{ data }">{{ $formatMoney(data.precio_venta || 0) }}</template>
+          </Column>
+          <Column header="Nuevo precio fijo" style="width: 13rem">
+            <template #body="{ data }">
+              <InputNumber v-model="preciosManuales[Number(data.id)]" mode="currency" :currency="systemCurrency" :locale="systemLocale" :min="0" fluid @focus="(e) => e.target.select()" />
+            </template>
+          </Column>
+          <Column v-if="afectarPrecioMin" header="Nuevo mínimo" style="width: 13rem">
+            <template #body="{ data }">
+              <InputNumber v-model="preciosMinManuales[Number(data.id)]" mode="currency" :currency="systemCurrency" :locale="systemLocale" :min="0" fluid @focus="(e) => e.target.select()" />
+            </template>
+          </Column>
+          <Column v-if="afectarPrecioMayor" header="Nuevo por mayor" style="width: 13rem">
+            <template #body="{ data }">
+              <InputNumber v-model="preciosMayorManuales[Number(data.id)]" mode="currency" :currency="systemCurrency" :locale="systemLocale" :min="0" fluid @focus="(e) => e.target.select()" />
+            </template>
+          </Column>
+        </DataTable>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="guardandoPrecios" @click="dialogAjustarPrecios = false" />
+        <Button label="Guardar precios" icon="pi pi-check" :loading="guardandoPrecios" :disabled="modoAjustePrecio === 'porcentaje' && Number(porcentajePrecio || 0) <= 0" @click="guardarAjustePrecios" />
       </template>
     </Dialog>
 

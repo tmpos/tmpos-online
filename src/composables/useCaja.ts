@@ -66,21 +66,30 @@ export function useCaja() {
       const now = new Date()
       const data = {
         monto_inicial: montoApertura.value,
+        entradas: 0,
+        retiros: 0,
         fecha_apertura: now.toISOString().split('T')[0],
         hora_apertura: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-        estado: 'ABIERTO',
+        estado: 'abierto',
+        observacion: '',
+        usuario_id: Number(localStorage.getItem('mr_user_id') || 0),
+        usuario_nombre: localStorage.getItem('mr_user_usuario') || '',
         almacen_id: almacenStore.activeId || 0,
         almacen_uid: almacenStore.activeUid || '',
       }
-      const res = await (window as any).electron.invoke('caja:abrirTurno', data)
+      const res = await (window as any).db.insert('caja_turnos', data)
       if (res.success) {
-        turnoActivo.value = res.data
+        turnoActivo.value = { ...data, ...(res.data || {}) }
         hayTurnoAbierto.value = true
         dialogAperturaCaja.value = false
         return true
       }
+      window.alert(`No se pudo abrir el turno: ${res.error || 'Error desconocido'}`)
       return false
-    } catch { return false }
+    } catch (error: any) {
+      window.alert(`No se pudo abrir el turno: ${error?.message || 'Error desconocido'}`)
+      return false
+    }
     finally { cargandoTurno.value = false }
   }
 

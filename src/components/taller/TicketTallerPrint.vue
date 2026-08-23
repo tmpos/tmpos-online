@@ -49,6 +49,25 @@ function isOn(value: any): boolean {
   return value === true || value === 1 || value === '1'
 }
 
+function seleccionarPorAlmacen(items: any[], orden: any): any {
+  const uid = String(
+    orden?.almacen_uid ||
+    localStorage.getItem('almacen_uid') ||
+    localStorage.getItem('almacen_default_uid') ||
+    '',
+  )
+  const id = Number(
+    orden?.almacen_id ||
+    localStorage.getItem('almacen_id') ||
+    localStorage.getItem('almacen_default_id') ||
+    0,
+  )
+  return (uid && items.find(item => String(item.uid || item.almacen_uid || '') === uid))
+    || (id && items.find(item => Number(item.almacen_id || item.id) === id))
+    || items[0]
+    || {}
+}
+
 function formatCurrency(value: any): string {
   return formatSystemCurrency(value)
 }
@@ -209,12 +228,24 @@ async function printTicket(orden: any) {
   } catch (_) {}
 
   let empresa: any = {}
+  let almacen: any = {}
   try {
-    const res = await window.db.getAll('empresa')
-    if (res.success && res.data?.length > 0) empresa = res.data[0]
+    const [resEmpresa, resAlmacenes] = await Promise.all([
+      window.db.getAll('empresa'),
+      window.db.getAll('almacenes'),
+    ])
+    if (resEmpresa.success && resEmpresa.data?.length > 0) empresa = seleccionarPorAlmacen(resEmpresa.data, orden)
+    if (resAlmacenes.success && resAlmacenes.data?.length > 0) almacen = seleccionarPorAlmacen(resAlmacenes.data, orden)
   } catch (_) {}
 
-  const logo = await resolvePrintableImage(empresa?.logoprinter || empresa?.logo)
+  empresa = {
+    ...empresa,
+    nombre: empresa?.nombre || almacen?.nombre || 'MI EMPRESA',
+    direccion: empresa?.direccion || almacen?.direccion || '',
+    telefono: empresa?.telefono || almacen?.telefono || '',
+    email: empresa?.email || almacen?.email || '',
+  }
+  const logo = await resolvePrintableImage(empresa?.logoprinter || empresa?.logo || almacen?.logo)
   if (logo) empresa = { ...empresa, logo, logoprinter: logo }
 
   let qrCodeData = ''

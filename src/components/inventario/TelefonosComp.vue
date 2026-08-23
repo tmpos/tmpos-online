@@ -28,6 +28,8 @@ import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
 import { imeiBelongsToPhone } from '@/domain/phoneImeiRelation'
+import ColorSelect from '@/components/shared/ColorSelect.vue'
+import CapacitySelect from '@/components/shared/CapacitySelect.vue'
 
 const toast = useToast()
 const router = useRouter()
@@ -107,12 +109,81 @@ const editarImeiForm = ref({
   nombre: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0,
   color: '', capacidad: '', bateria: '', estado: 'DISPONIBLE', proveedor: '', nota: '',
 })
+const colorRapidoVisible = ref(false)
+const colorRapidoNombre = ref('')
+const colorRapidoCodigo = ref('#000000')
+const capacidadRapidaVisible = ref(false)
+const capacidadRapidaNombre = ref('')
 const estadosImei = [
   { label: 'DISPONIBLE', value: 'DISPONIBLE' },
   { label: 'VENDIDO', value: 'VENDIDO' },
   { label: 'APARTADO', value: 'APARTADO' },
   { label: 'EN GARANTIA', value: 'EN GARANTIA' },
 ]
+
+function abrirColorRapido() {
+  colorRapidoNombre.value = ''
+  colorRapidoCodigo.value = '#000000'
+  colorRapidoVisible.value = true
+}
+
+function abrirCapacidadRapida() {
+  capacidadRapidaNombre.value = ''
+  capacidadRapidaVisible.value = true
+}
+
+async function guardarCapacidadRapida() {
+  const nombre = capacidadRapidaNombre.value.trim().toUpperCase().replace(/\s+/g, '')
+  if (!nombre) return
+  const existentes = await window.db.getAll('capacidades')
+  const repetida = existentes.success && (existentes.data || []).some((item: any) => String(item.nombre || '').toUpperCase() === nombre)
+  if (repetida) {
+    imeiForm.value.capacidad = nombre
+    capacidadRapidaVisible.value = false
+    toast.add({ severity: 'info', summary: 'Capacidad seleccionada', detail: `${nombre} ya estaba registrada`, life: 2500 })
+    return
+  }
+  const result = await window.db.insert('capacidades', { nombre, estado: 'activo' })
+  if (!result.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear la capacidad', life: 4000 })
+    return
+  }
+  imeiForm.value.capacidad = nombre
+  capacidadRapidaVisible.value = false
+  toast.add({ severity: 'success', summary: 'Capacidad creada', detail: `${nombre} fue creada y seleccionada`, life: 2500 })
+}
+
+function copiarPrecioVentaImei() {
+  const precio = Number(imeiForm.value.precio_venta || 0)
+  imeiForm.value.precio_min = precio
+  imeiForm.value.precio_xmayor = precio
+  toast.add({ severity: 'info', summary: 'Precios copiados', detail: 'Precio mínimo y precio mayor actualizados', life: 2200 })
+}
+
+async function guardarColorRapido() {
+  const nombre = colorRapidoNombre.value.trim().toUpperCase()
+  if (!nombre) return
+  if (!/^#[0-9A-F]{6}$/i.test(colorRapidoCodigo.value)) {
+    toast.add({ severity: 'warn', summary: 'Código inválido', detail: 'Selecciona un color válido', life: 3000 })
+    return
+  }
+  const existentes = await window.db.getAll('colores')
+  const repetido = existentes.success && (existentes.data || []).some((color: any) => String(color.nombre || '').toUpperCase() === nombre)
+  if (repetido) {
+    imeiForm.value.color = nombre
+    colorRapidoVisible.value = false
+    toast.add({ severity: 'info', summary: 'Color seleccionado', detail: `${nombre} ya estaba registrado`, life: 2500 })
+    return
+  }
+  const result = await window.db.insert('colores', { nombre, codigo: colorRapidoCodigo.value, estado: 'activo' })
+  if (!result.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear el color', life: 4000 })
+    return
+  }
+  imeiForm.value.color = nombre
+  colorRapidoVisible.value = false
+  toast.add({ severity: 'success', summary: 'Color creado', detail: `${nombre} fue creado y seleccionado`, life: 2500 })
+}
 
 const telefonosAMoverHeader = computed(() => {
   if (selectedTelefonos.value.length > 1) return `Mover ${selectedTelefonos.value.length} telefonos a otro Almacen`
@@ -1320,11 +1391,11 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
-            <InputText v-model="editarImeiForm.capacidad" placeholder="Ej: 256GB" fluid />
+            <CapacitySelect v-model="editarImeiForm.capacidad" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
-            <InputText v-model="editarImeiForm.color" placeholder="Color" fluid />
+            <ColorSelect v-model="editarImeiForm.color" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Bateria</label>
@@ -1501,7 +1572,10 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Precio Venta</label>
-          <InputNumber v-model="imeiForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
+          <div class="flex items-center gap-1">
+            <InputNumber v-model="imeiForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" class="flex-1 min-w-0" fluid @focus="(e) => e.target.select()" />
+            <Button icon="pi pi-copy" severity="secondary" outlined @click="copiarPrecioVentaImei" v-tooltip="'Copiar a Precio Min y Precio Mayor'" />
+          </div>
         </div>
 
         <div class="flex flex-col gap-1">
@@ -1516,12 +1590,20 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Capacidad</label>
-          <InputText v-model="imeiForm.capacidad" placeholder="Ej: 128GB" fluid class="uppercase" style="text-transform: uppercase;" />
+          <div class="flex items-center gap-2 min-w-0">
+            <div class="flex-1 min-w-0 overflow-hidden">
+              <CapacitySelect v-model="imeiForm.capacidad" class="w-full min-w-0" />
+            </div>
+            <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear capacidad" @click="abrirCapacidadRapida" v-tooltip="'Crear capacidad'" />
+          </div>
         </div>
 
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Color</label>
-          <InputText v-model="imeiForm.color" placeholder="Color" fluid class="uppercase" style="text-transform: uppercase;" />
+          <div class="flex gap-2">
+            <ColorSelect v-model="imeiForm.color" class="flex-1" />
+            <Button icon="pi pi-plus" severity="info" outlined @click="abrirColorRapido" v-tooltip="'Crear color'" />
+          </div>
         </div>
 
         <div class="flex flex-col gap-1 sm:col-span-2">
@@ -1572,7 +1654,10 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Venta</label>
-            <InputNumber v-model="imeiForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e) => e.target.select()" />
+            <div class="flex items-center gap-1">
+              <InputNumber v-model="imeiForm.precio_venta" mode="currency" :currency="systemCurrency" :locale="systemLocale" class="flex-1 min-w-0" fluid @focus="(e) => e.target.select()" />
+              <Button icon="pi pi-copy" severity="secondary" outlined @click="copiarPrecioVentaImei" v-tooltip="'Copiar a Precio Min y Precio Mayor'" />
+            </div>
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Precio Min</label>
@@ -1584,11 +1669,19 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
-            <InputText v-model="imeiForm.capacidad" placeholder="Ej: 128GB" fluid class="uppercase" style="text-transform: uppercase;" />
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="flex-1 min-w-0 overflow-hidden">
+                <CapacitySelect v-model="imeiForm.capacidad" class="w-full min-w-0" />
+              </div>
+              <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear capacidad" @click="abrirCapacidadRapida" v-tooltip="'Crear capacidad'" />
+            </div>
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
-            <InputText v-model="imeiForm.color" placeholder="Color" fluid class="uppercase" style="text-transform: uppercase;" />
+            <div class="flex gap-2">
+              <ColorSelect v-model="imeiForm.color" class="flex-1" />
+              <Button icon="pi pi-plus" severity="info" outlined @click="abrirColorRapido" v-tooltip="'Crear color'" />
+            </div>
           </div>
         </div>
 
@@ -1654,6 +1747,39 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogNuevoProveedor = false" />
         <Button label="Crear y Seleccionar" icon="pi pi-check" :disabled="!nuevoProveedorForm.nombre.trim()" @click="crearProveedorTel" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="colorRapidoVisible" header="Nuevo color" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-3 pt-2">
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Nombre</label>
+          <InputText v-model="colorRapidoNombre" placeholder="Ejemplo: AZUL MARINO" class="uppercase" fluid @keyup.enter="guardarColorRapido" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Color visual</label>
+          <div class="flex items-center gap-3">
+            <input v-model="colorRapidoCodigo" type="color" class="w-14 h-11 rounded border border-surface-300 cursor-pointer bg-transparent p-1" />
+            <InputText v-model="colorRapidoCodigo" class="font-mono uppercase flex-1" maxlength="7" />
+            <span class="w-10 h-10 rounded-full border border-surface-300 shadow-sm" :style="{ backgroundColor: colorRapidoCodigo }"></span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="colorRapidoVisible = false" />
+        <Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!colorRapidoNombre.trim()" @click="guardarColorRapido" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="capacidadRapidaVisible" header="Nueva capacidad" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-2 pt-2">
+        <label class="font-semibold text-sm">Capacidad</label>
+        <InputText v-model="capacidadRapidaNombre" placeholder="Ejemplo: 128GB, 512GB, 220L" class="uppercase" fluid @keyup.enter="guardarCapacidadRapida" />
+        <small class="text-surface-500">Se guardará en mayúsculas y sin espacios.</small>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="capacidadRapidaVisible = false" />
+        <Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!capacidadRapidaNombre.trim()" @click="guardarCapacidadRapida" />
       </template>
     </Dialog>
   </div>

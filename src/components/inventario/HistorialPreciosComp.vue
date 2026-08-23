@@ -44,7 +44,7 @@ const filtroTabla = ref('TODAS')
 const tiposDisponibles = computed(() => [
   { label: 'TODAS', value: 'TODAS' },
   { label: systemMode.isGeneralStore ? 'productos' : 'accesorios', value: 'accesorios' },
-  { label: 'electrodomesticos', value: 'electrodomesticos' },
+  { label: 'Electrónicos', value: 'electrodomesticos' },
   { label: 'piezas', value: 'piezas' },
   ...(systemMode.isCellphoneStore ? [{ label: 'imei', value: 'imei' }] : []),
   { label: 'serial', value: 'serial' },

@@ -181,6 +181,7 @@ export interface SyncDetail {
   downloaded: number
   uploaded: number
   errors: number
+  errorMessages?: string[]
 }
 
 export interface SyncResult {
@@ -189,6 +190,7 @@ export interface SyncResult {
   updates: number
   errors: number
   message: string
+  details?: SyncDetail[]
 }
 
 export interface SyncStatus {
@@ -548,6 +550,22 @@ function columnsToSqlDefs(cols: ServerColumn[]): string[] {
   })
 }
 
+function inferColumnsFromRows(rows: any[]): ServerColumn[] {
+  const names = new Set<string>()
+  for (const row of rows) {
+    for (const name of Object.keys(row || {})) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) names.add(name)
+    }
+  }
+  // upsertLocal no copia el id remoto: cada snapshot necesita su propia clave
+  // numerica local para poder actualizarse y eliminarse posteriormente.
+  names.delete('id')
+  return [
+    { name: 'id', type: 'INTEGER', pk: true },
+    ...Array.from(names).map(name => ({ name, type: 'TEXT' })),
+  ]
+}
+
 async function recreateLocalTable(tabla: string, columns: ServerColumn[]): Promise<boolean> {
   try {
     await (window as any).electron?.invoke('consultaservidor', 'eliminarTabla', tabla)
@@ -821,6 +839,7 @@ async function ensureLocalTableExists(tabla: string, columns: ServerColumn[]): P
     const res = await (window as any).electron?.invoke('consultaservidor', 'getTableColumns', tabla, 'names')
     const localCols: string[] = Array.isArray(res) ? res : []
     if (localCols.length === 0) {
+      if (!columns.length) return false
       const colDefs = columnsToSqlDefs(columns)
       const created = await (window as any).electron?.invoke('consultaservidor', 'crearTabla', tabla, colDefs)
       if (created?.success === false) throw new Error(created.error || `No se pudo crear ${tabla}`)
@@ -840,8 +859,10 @@ async function ensureLocalTableExists(tabla: string, columns: ServerColumn[]): P
   } catch {
     // table doesn't exist, create it
     try {
+      if (!columns.length) return false
       const colDefs = columnsToSqlDefs(columns)
-      await (window as any).electron?.invoke('consultaservidor', 'crearTabla', tabla, colDefs)
+      const created = await (window as any).electron?.invoke('consultaservidor', 'crearTabla', tabla, colDefs)
+      if (created?.success === false) return false
       return true
     } catch { return false }
   }
@@ -1051,8 +1072,8 @@ async function repairSystemTables(): Promise<void> {
   }
 }
 
-export async function downloadAllTables(): Promise<SyncResult> {
-  if ((window as any).__onlineOnly) {
+export async function downloadAllTables(options: { force?: boolean } = {}): Promise<SyncResult> {
+  if ((window as any).__onlineOnly && !options.force) {
     return { success: false, inserts: 0, updates: 0, errors: 0, message: 'La descarga local esta deshabilitada en modo online obligatorio' }
   }
   if (!await ensureCloudApi()) {
@@ -1080,9 +1101,13 @@ export async function downloadAllTables(): Promise<SyncResult> {
     notify({ running: true, tabla, progreso: `Descargando ${tabla} (${table.count} registros)...` })
     let downloaded = 0
     let errors = 0
+    const errorMessages: string[] = []
     try {
-      if (!(await ensureLocalTableExists(tabla, table.columns))) continue
       const cloudRows = await fetchCloudRows(tabla)
+      const localColumns = table.columns?.length ? table.columns : inferColumnsFromRows(cloudRows)
+      if (!(await ensureLocalTableExists(tabla, localColumns))) {
+        throw new Error(`No se pudo preparar la tabla local ${tabla}`)
+      }
       const localRows = await getLocalRows(tabla)
       for (const row of cloudRows) {
         if (row.uid) {
@@ -1092,15 +1117,17 @@ export async function downloadAllTables(): Promise<SyncResult> {
           } catch (error) {
             console.error(`[TM Cloud] No se pudo importar ${tabla} (${String(row.uid || 'sin uid')}):`, error)
             errors++
+            if (errorMessages.length < 5) errorMessages.push(error instanceof Error ? error.message : String(error))
           }
         }
       }
     } catch (error) {
       console.error(`[TM Cloud] Error descargando la tabla ${tabla}:`, error)
       errors++
+      if (errorMessages.length < 5) errorMessages.push(error instanceof Error ? error.message : String(error))
     }
     if (downloaded > 0 || errors > 0) {
-      details.push({ tabla, downloaded, uploaded: 0, errors })
+      details.push({ tabla, downloaded, uploaded: 0, errors, ...(errorMessages.length ? { errorMessages } : {}) })
     }
     await setConfigValue(`last_sync_${tabla}`, nowSql())
   }
@@ -1118,6 +1145,7 @@ export async function downloadAllTables(): Promise<SyncResult> {
     updates: downloaded,
     errors,
     message: `${downloaded} descargados, ${errors} errores`,
+    details,
   }
   notify({ running: false, lastSync: completedAt, mode: currentMode, result, details })
   return result

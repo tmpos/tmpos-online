@@ -17,6 +17,8 @@ import Toast from 'primevue/toast'
 import Swal from 'sweetalert2'
 import { useSystemModeStore } from '@/stores/systemMode'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+import ColorSelect from '@/components/shared/ColorSelect.vue'
+import CapacitySelect from '@/components/shared/CapacitySelect.vue'
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
@@ -601,11 +603,11 @@ onMounted(cargarDatos)
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Color</label>
-                    <InputText v-model="imeiData.color" placeholder="Color" fluid class="text-sm" />
+                    <ColorSelect v-model="imeiData.color" class="text-sm" />
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Capacidad</label>
-                    <InputText v-model="imeiData.capacidad" placeholder="Ej: 128GB" fluid class="text-sm" />
+                    <CapacitySelect v-model="imeiData.capacidad" class="text-sm" />
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Costo (RD$)</label>
@@ -691,11 +693,11 @@ onMounted(cargarDatos)
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Color</label>
-                    <InputText v-model="serialData.color" placeholder="Color" fluid class="text-sm" />
+                    <ColorSelect v-model="serialData.color" class="text-sm" />
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Capacidad</label>
-                    <InputText v-model="serialData.capacidad" placeholder="Ej: 220L" fluid class="text-sm" />
+                    <CapacitySelect v-model="serialData.capacidad" class="text-sm" />
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Costo (RD$)</label>

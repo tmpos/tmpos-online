@@ -186,6 +186,7 @@ function buildReporteTallerHtml(emp: any, fechaActual: string, fmtNum: (n: numbe
   <table class="cards"><tr>
     <td class="card"><div class="label">Ingresos</div><div class="value">${getSystemCurrencyCode()} ${fmtNum(resumenFiltrado.value.ingresos)}</div></td>
     <td class="card"><div class="label">Costo piezas</div><div class="value">${getSystemCurrencyCode()} ${fmtNum(resumenFiltrado.value.costoPiezas)}</div></td>
+    <td class="card"><div class="label">Pagado técnicos</div><div class="value">${getSystemCurrencyCode()} ${fmtNum(resumenFiltrado.value.pagadoTecnicos)}</div></td>
     <td class="card green"><div class="label">Ganancia</div><div class="value">${getSystemCurrencyCode()} ${fmtNum(resumenFiltrado.value.ganancia)}</div></td>
   </tr></table>
 
@@ -257,6 +258,9 @@ const resumenFiltrado = computed(() => {
     completadas: completadas.length,
     ingresos: data.reduce((s, o) => s + Number(o.total || 0), 0),
     costoPiezas: data.reduce((s, o) => s + Number(o.precio_pieza || 0), 0),
+    pagadoTecnicos: data
+      .filter(o => String(o.estado_pago_tecnico || o.pago_tecnico || '').trim().toUpperCase() === 'PAGADO')
+      .reduce((s, o) => s + Number(o.beneficio_tecnico || 0), 0),
     ganancia: completadas.reduce((s, o) => s + Number(o.beneficio_empresa || 0), 0),
   }
 })
@@ -348,6 +352,7 @@ async function generarPDF() {
       + '<table><tr>'
       + '<td style="padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6"><div style="font-size:10px;color:#666">Ingresos</div><div style="font-size:20px;font-weight:bold">RD$ ' + fmtNum(resumenFiltrado.value.ingresos) + '</div></td>'
       + '<td style="padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6"><div style="font-size:10px;color:#666">Costo Piezas</div><div style="font-size:20px;font-weight:bold">RD$ ' + fmtNum(resumenFiltrado.value.costoPiezas) + '</div></td>'
+      + '<td style="padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6"><div style="font-size:10px;color:#666">Pagado Técnicos</div><div style="font-size:20px;font-weight:bold">RD$ ' + fmtNum(resumenFiltrado.value.pagadoTecnicos) + '</div></td>'
       + '<td style="padding:10px 14px;background:#d4edda;border:1px solid #c3e6cb"><div style="font-size:10px;color:#666">Ganancia</div><div style="font-size:24px;font-weight:bold;color:#155724">RD$ ' + fmtNum(resumenFiltrado.value.ganancia) + '</div></td>'
       + '</tr></table>'
       + '<div class="sec">Ordenes por Estado</div>'
@@ -420,6 +425,7 @@ async function generarExcel() {
       ['Concepto', 'Monto (RD$)'],
       ['Ingresos', resumenFiltrado.value.ingresos],
       ['Costo de piezas', resumenFiltrado.value.costoPiezas],
+      ['Pagado a técnicos', resumenFiltrado.value.pagadoTecnicos],
       ['Ganancia', resumenFiltrado.value.ganancia],
       [],
       ['ÓRDENES POR ESTADO'],
@@ -447,6 +453,7 @@ async function generarExcel() {
       Pendiente: Number(orden.pendiente || 0),
       Total: Number(orden.total || 0),
       'Ganancia empresa': Number(orden.beneficio_empresa || 0),
+      'Pago técnico': String(orden.estado_pago_tecnico || '').toUpperCase() === 'PAGADO' ? Number(orden.beneficio_tecnico || 0) : 0,
     }))
 
     const workbook = XLSX.utils.book_new()
@@ -585,7 +592,7 @@ onMounted(async () => {
       </div>
 
       <div v-else class="space-y-5">
-        <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3">
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-surface-400">Ordenes</span>
             <p class="text-2xl font-bold mt-1">{{ resumenFiltrado.total }}</p>
@@ -605,6 +612,10 @@ onMounted(async () => {
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-surface-400">Ingresos</span>
             <p class="text-2xl font-bold mt-1 text-primary">{{ $formatMoney(resumenFiltrado.ingresos) }}</p>
+          </div>
+          <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
+            <span class="text-xs text-violet-500 font-semibold">Pagado Técnicos</span>
+            <p class="text-2xl font-bold mt-1 text-violet-600">{{ $formatMoney(resumenFiltrado.pagadoTecnicos) }}</p>
           </div>
           <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
             <span class="text-xs text-green-600 font-semibold">Ganancia</span>
@@ -680,6 +691,10 @@ onMounted(async () => {
                 <div class="flex justify-between">
                   <span class="text-surface-500">Costo Piezas</span>
                   <span class="font-semibold">{{ $formatMoney(resumenFiltrado.costoPiezas) }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-surface-500">Pagado a Técnicos</span>
+                  <span class="font-semibold text-violet-600">{{ $formatMoney(resumenFiltrado.pagadoTecnicos) }}</span>
                 </div>
                 <div class="flex justify-between border-t border-surface-200 dark:border-surface-700 pt-2 mt-2">
                   <span class="text-green-600 font-semibold">Ganancia</span>

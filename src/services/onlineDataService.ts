@@ -50,6 +50,21 @@ const cloudSchemaChecks = new Map<string, Promise<void>>()
 let cloudSchemaCache: { tables: Record<string, CloudTableSchema>; fetchedAt: number } | null = null
 const CLOUD_EXCLUDED_LOCAL_COLUMNS = new Set(['id', 'almacen_id', 'sync_status', 'last_synced_at', '_rowid'])
 const CLOUD_FALLBACK_SCHEMAS: Record<string, CloudColumnDefinition[]> = {
+  capacidades: [
+    { name: 'uid', type: 'TEXT' },
+    { name: 'nombre', type: 'TEXT' },
+    { name: 'estado', type: 'TEXT' },
+    { name: 'created_at', type: 'DATETIME' },
+    { name: 'updated_at', type: 'DATETIME' },
+  ],
+  colores: [
+    { name: 'uid', type: 'TEXT' },
+    { name: 'nombre', type: 'TEXT' },
+    { name: 'codigo', type: 'TEXT' },
+    { name: 'estado', type: 'TEXT' },
+    { name: 'created_at', type: 'DATETIME' },
+    { name: 'updated_at', type: 'DATETIME' },
+  ],
   datos_config: [
     { name: 'uid', type: 'TEXT' },
     { name: 'nombre', type: 'TEXT' },
@@ -462,9 +477,10 @@ export async function installOnlineDataService(): Promise<void> {
       if (channel === 'db:insert') return onlineDb.insert(args[0], args[1] || {})
       if (channel === 'db:update') return onlineDb.update(args[0], args[1], args[2] || {})
       if (channel === 'db:delete') return onlineDb.delete(args[0], args[1])
+      if (['db:insertCloud', 'db:updateCloud', 'db:deleteLocalOnly'].includes(channel)) return localElectron.invoke(channel, ...args)
       if (channel.startsWith('db:') && isLocalTable(args[0])) return localElectron.invoke(channel, ...args)
       if (isLocalChannel(channel)) return localElectron.invoke(channel, ...args)
-      if (channel === 'consultaservidor' && args[0] === 'getAllConfig') return localElectron.invoke(channel, ...args)
+      if (channel === 'consultaservidor' && ['getAllConfig', 'tableExists', 'getTableColumns', 'crearTabla', 'addColumnToTable', 'eliminarTabla', 'getAllTables'].includes(String(args[0] || ''))) return localElectron.invoke(channel, ...args)
       return runtime('invoke', { channel, args })
       },
     }

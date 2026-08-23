@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.store'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import QRCode from 'qrcode'
@@ -14,6 +14,7 @@ import { useLocaleProfile } from '@/composables/useLocaleProfile'
 import { guardarGastoOnline } from '@/services/gastosOnlineService'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const almacenStore = useAlmacenStore()
 const appName = ref('ArgentPOS')
@@ -466,7 +467,20 @@ function limpiarBusquedaImeiGeneral() {
   imeiBusquedaGeneral.value = ''
   resultadosImeiGeneral.value = []
   busquedaImeiRealizada.value = false
+  if (route.query.buscar_imei) {
+    const query = { ...route.query }
+    delete query.buscar_imei
+    void router.replace({ query })
+  }
 }
+
+watch(() => route.query.buscar_imei, async (value) => {
+  const imei = String(value || '').trim()
+  if (imei.length < 3) return
+  imeiBusquedaGeneral.value = imei
+  dialogBuscadorImei.value = true
+  await buscarImeiGeneral()
+}, { immediate: true })
 
 async function copiarUrl() {
   try {

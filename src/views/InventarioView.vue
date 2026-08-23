@@ -6,6 +6,8 @@ import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
 import CategoriasComp from '@/components/inventario/CategoriasComp.vue'
 import MarcasComp from '@/components/inventario/MarcasComp.vue'
+import ColoresComp from '@/components/inventario/ColoresComp.vue'
+import CapacidadesComp from '@/components/inventario/CapacidadesComp.vue'
 import TelefonosComp from '@/components/inventario/TelefonosComp.vue'
 import AccesoriosComp from '@/components/inventario/AccesoriosComp.vue'
 import ElectrodomesticosComp from '@/components/inventario/ElectrodomesticosComp.vue'
@@ -29,11 +31,13 @@ const allItems: SubMenuItem[] = [
   { label: 'Telefonos', icon: 'pi pi-mobile', key: 'telefonos' },
   { label: 'IMEI', icon: 'pi pi-barcode', key: 'imei' },
   { label: 'Accesorios', icon: 'pi pi-headphones', key: 'accesorios' },
-  { label: 'Electrodomesticos', icon: 'pi pi-sitemap', key: 'electrodomesticos' },
+  { label: 'Electrónicos', icon: 'pi pi-sitemap', key: 'electrodomesticos' },
   { label: 'Serial', icon: 'pi pi-qrcode', key: 'serial' },
   { label: 'Perdidas', icon: 'pi pi-times-circle', key: 'perdidas' },
   { label: 'Categorias', icon: 'pi pi-tags', key: 'categorias' },
   { label: 'Marcas', icon: 'pi pi-bookmark', key: 'marcas' },
+  { label: 'Colores', icon: 'pi pi-palette', key: 'colores' },
+  { label: 'Capacidades', icon: 'pi pi-database', key: 'capacidades' },
   { label: 'Etiquetas', icon: 'pi pi-qrcode', key: 'etiquetas' },
   { label: 'Cambiazo', icon: 'pi pi-sync', key: 'cambiazo' },
   { label: 'Transferencias', icon: 'pi pi-arrow-right-arrow-left', key: 'transferencias' },
@@ -46,7 +50,7 @@ const allItems: SubMenuItem[] = [
 const cellphoneOnlyKeys = new Set(['telefonos', 'imei', 'cambiazo'])
 const items = computed(() => allItems
   .filter(item => !systemMode.isGeneralStore || !cellphoneOnlyKeys.has(item.key))
-  .filter(item => auth.tienePermiso(item.key))
+  .filter(item => auth.tienePermiso(item.key) || (['colores', 'capacidades'].includes(item.key) && auth.tienePermiso('marcas')))
   .map(item => item.key === 'accesorios' && systemMode.isGeneralStore
     ? { ...item, label: 'Productos', icon: 'pi pi-box' }
     : item))
@@ -54,6 +58,8 @@ const items = computed(() => allItems
 const components: Record<string, any> = {
   categorias: CategoriasComp,
   marcas: MarcasComp,
+  colores: ColoresComp,
+  capacidades: CapacidadesComp,
   telefonos: TelefonosComp,
   accesorios: AccesoriosComp,
   electrodomesticos: ElectrodomesticosComp,

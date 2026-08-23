@@ -83,10 +83,7 @@ function setActiveComponentRef(el: any) {
 async function guardarExpress() {
   try {
     const turnoRes = await window.electron.invoke('caja:getTurnoActivo', almacenStore.activeUid || '') as any
-    if (!turnoRes?.success || !turnoRes.data?.id) {
-      toast.add({ severity: 'warn', summary: 'Caja cerrada', detail: 'Abre un turno de caja antes de cobrar una orden express', life: 3500 })
-      return
-    }
+    const turnoId = turnoRes?.success && turnoRes.data?.id ? Number(turnoRes.data.id) : null
     const ahora = new Date()
     const monto = Number(expressForm.value.total_reparacion || 0)
     const pago = {
@@ -96,7 +93,7 @@ async function guardarExpress() {
       fecha: ahora.toISOString().split('T')[0],
       hora: ahora.toTimeString().slice(0, 5),
       metodo: expressForm.value.metodo_pago,
-      turno_id: Number(turnoRes.data.id),
+      ...(turnoId ? { turno_id: turnoId } : {}),
       almacen_uid: almacenStore.activeUid || '',
       created_at: ahora.toISOString(),
       nota: 'COBRO DE ORDEN EXPRESS',
