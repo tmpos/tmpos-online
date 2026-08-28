@@ -20,7 +20,7 @@ import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
 
 import { envioElectron } from '@/funciones/funciones.js'
-import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { uploadImage, getImageUrl, getImageIds, serializeImageIds, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useEmpresa } from '@/composables/useEmpresa'
@@ -104,6 +104,7 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const subiendoImagen = ref(false)
 const dialogBuscarImagen = ref(false)
 const importandoImagenInternet = ref(false)
+const formImages = computed(() => getImageIds(form.value.imagen))
 
 const link = ref('')
 const api = ref('')
@@ -745,12 +746,24 @@ async function crearProveedor() {
   }
 }
 
+async function guardarImagenesAccesorio(ids: string[]) {
+  const imagen = serializeImageIds(ids)
+  form.value.imagen = imagen
+  if (!isEditing.value || !selectedAccesorio.value?.id) return
+  const actualizado = await window.db.update('accesorios', selectedAccesorio.value.id, { imagen })
+  if (!actualizado.success) throw new Error(actualizado.error || 'No se pudieron guardar las imagenes')
+  selectedAccesorio.value.imagen = imagen
+  const local = accesorios.value.find((accesorio: any) => accesorio.id === selectedAccesorio.value.id)
+  if (local) local.imagen = imagen
+  if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
+}
+
 async function subirImagen() {
   const input = fileInput.value
   if (!input?.files?.length) return
-  const file = input.files[0]
-  if (!file.type.startsWith('image/')) {
-    toast.add({ severity: 'warn', summary: 'Solo imagenes', detail: 'Selecciona un archivo de imagen', life: 3000 })
+  const files = Array.from(input.files)
+  if (files.some(file => !file.type.startsWith('image/'))) {
+    toast.add({ severity: 'warn', summary: 'Solo imagenes', detail: 'Todos los archivos deben ser imagenes', life: 3000 })
     return
   }
   if (!tmCloudConnected()) {
@@ -759,19 +772,28 @@ async function subirImagen() {
   }
   subiendoImagen.value = true
   try {
-    const uid = await uploadImage(file, 'accesorios')
-    form.value.imagen = uid
-    if (isEditing.value && selectedAccesorio.value?.id) {
-      const actualizado = await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: uid })
-      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
-      selectedAccesorio.value.imagen = uid
-      const local = accesorios.value.find((accesorio: any) => accesorio.id === selectedAccesorio.value.id)
-      if (local) local.imagen = uid
-      if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
+    const ids = getImageIds(form.value.imagen)
+    const errors: string[] = []
+    let uploaded = 0
+    for (let index = 0; index < files.length; index++) {
+      try {
+        ids.push(await uploadImage(files[index], 'accesorios'))
+        uploaded++
+      } catch (error: any) {
+        errors.push(error?.message || `${files[index].name}: no se pudo subir`)
+      }
+      if (index < files.length - 1) await new Promise(resolve => setTimeout(resolve, 350))
     }
-    toast.add({ severity: 'success', summary: 'Imagen subida', life: 2000 })
+    if (!uploaded) throw new Error(errors[0] || 'No se pudo subir ninguna imagen')
+    await guardarImagenesAccesorio(ids)
+    toast.add({
+      severity: errors.length ? 'warn' : 'success',
+      summary: errors.length ? 'Carga parcial' : (uploaded === 1 ? 'Imagen subida' : 'Imagenes subidas'),
+      detail: errors.length ? `${uploaded} agregada(s), ${errors.length} omitida(s). ${errors[0]}` : `${uploaded} imagen(es) agregada(s)`,
+      life: errors.length ? 5000 : 2500,
+    })
   } catch (e: any) {
-    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo subir la imagen', life: 4000 })
+    toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudieron subir las imagenes', life: 4500 })
   } finally {
     subiendoImagen.value = false
     input.value = ''
@@ -799,16 +821,7 @@ async function importarImagenInternet(image: any) {
     const baseName = String(form.value.nombre || 'accesorio').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'accesorio'
     const file = new File([blob], `${baseName}.${extension}`, { type: blob.type })
     const uid = await uploadImage(file, 'accesorios')
-    form.value.imagen = uid
-    if (isEditing.value && selectedAccesorio.value?.id) {
-      const actualizado = await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: uid })
-      if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la imagen')
-      selectedAccesorio.value.imagen = uid
-      const local = accesorios.value.find((accesorio: any) => accesorio.id === selectedAccesorio.value.id)
-      if (local) local.imagen = uid
-      if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
-    }
-    dialogBuscarImagen.value = false
+    await guardarImagenesAccesorio([...getImageIds(form.value.imagen), uid])
     toast.add({ severity: 'success', summary: 'Imagen agregada', detail: 'La imagen de internet fue guardada en el accesorio', life: 3000 })
   } catch (error: any) {
     toast.add({ severity: 'error', summary: 'No se pudo traer la imagen', detail: error?.message || 'Intenta con otra imagen', life: 4500 })
@@ -818,16 +831,10 @@ async function importarImagenInternet(image: any) {
   }
 }
 
-async function eliminarImagen() {
-  if (!form.value.imagen) return
-  try {
-    await deleteImage(form.value.imagen)
-  } catch {}
-  form.value.imagen = ''
-  if (isEditing.value && selectedAccesorio.value?.id) {
-    await window.db.update('accesorios', selectedAccesorio.value.id, { imagen: '' })
-    if (isOnline()) await pushLocalRowToCloud('accesorios', selectedAccesorio.value.id)
-  }
+async function eliminarImagen(uid: string) {
+  if (!uid) return
+  try { await deleteImage(uid) } catch {}
+  await guardarImagenesAccesorio(getImageIds(form.value.imagen).filter(imageId => imageId !== uid))
 }
 
 function imagenUrl(uid: string | null | undefined): string | null {
@@ -1168,14 +1175,16 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
         </div>
 
         <div class="flex flex-col gap-2">
-          <label class="font-semibold text-sm">Imagen</label>
-          <div v-if="form.imagen" class="relative w-32 h-32 rounded-lg overflow-hidden border border-surface-200 dark:border-surface-700">
-            <img :src="imagenUrl(form.imagen)" class="w-full h-full object-cover" alt="Imagen del accesorio" />
-            <Button icon="pi pi-times" severity="danger" text rounded size="small" class="absolute top-1 right-1 !w-6 !h-6 !text-xs bg-white/80 dark:bg-surface-800/80" @click="eliminarImagen" />
+          <label class="font-semibold text-sm">Imagenes</label>
+          <div v-if="formImages.length" class="grid grid-cols-3 gap-2">
+            <div v-for="imageId in formImages" :key="imageId" class="relative aspect-square rounded-lg overflow-hidden border border-surface-200 dark:border-surface-700">
+              <img :src="getImageUrl(imageId)" class="w-full h-full object-cover" alt="Imagen del accesorio" />
+              <Button icon="pi pi-times" severity="danger" text rounded size="small" class="absolute top-1 right-1 !w-6 !h-6 !text-xs bg-white/80 dark:bg-surface-800/80" @click="eliminarImagen(imageId)" />
+            </div>
           </div>
           <div class="flex flex-wrap gap-2">
-            <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="subirImagen" />
-            <Button :label="(form.imagen ? 'Cambiar ' : 'Subir ') + 'Imagen'" icon="pi pi-upload" severity="secondary" outlined :loading="subiendoImagen" @click="fileInput?.click()" />
+            <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="subirImagen" />
+            <Button label="Agregar imagenes" icon="pi pi-upload" severity="secondary" outlined :loading="subiendoImagen" @click="fileInput?.click()" />
             <Button v-if="isEditing" label="Buscar en internet" icon="pi pi-globe" severity="info" outlined :disabled="subiendoImagen" @click="abrirBusquedaImagen" />
           </div>
         </div>

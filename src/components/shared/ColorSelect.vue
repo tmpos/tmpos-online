@@ -5,11 +5,17 @@ import { useColorCatalog } from '@/composables/useColorCatalog'
 
 const props = defineProps<{ modelValue?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
-const { colores } = useColorCatalog()
+const { colores, cargarColores } = useColorCatalog()
 
 watch([() => props.modelValue, colores], ([value, options]) => {
   if (!value && options.length > 0) emit('update:modelValue', String(options[0].nombre || ''))
 }, { immediate: true })
+
+watch(() => props.modelValue, async value => {
+  if (value && !colores.value.some(color => String(color.nombre || '') === String(value))) {
+    await cargarColores()
+  }
+})
 </script>
 
 <template>
@@ -26,7 +32,7 @@ watch([() => props.modelValue, colores], ([value, options]) => {
   >
     <template #value="{ value, placeholder }">
       <div v-if="value" class="flex items-center gap-2">
-        <span class="w-4 h-4 rounded-full border border-surface-300" :style="{ backgroundColor: colores.find(c => c.nombre === value)?.codigo || value }"></span>
+        <span class="w-4 h-4 rounded-full border border-surface-300" :style="{ backgroundColor: colores.find(c => c.nombre === value)?.codigo || '#64748b' }"></span>
         <span>{{ value }}</span>
       </div>
       <span v-else>{{ placeholder }}</span>

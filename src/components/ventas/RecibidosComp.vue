@@ -3,6 +3,7 @@ import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
 import { ref, computed, onMounted, watch } from 'vue'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 import { useRoute, useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -52,6 +53,7 @@ const deleteOtpConfirmando = ref(false)
 const busqueda = ref(String(route.query.search || ''))
 const estadoFiltro = ref(route.query.estado === 'todos' ? 'TODOS' : 'RECIBIDO')
 const viewMode = ref<'table' | 'cards'>('table')
+const tableRenderKey = ref(0)
 const verTodosAlmacenes = ref(false)
 const dialogNuevoTelefono = ref(false)
 const nuevoTelefonoForm = ref({ nombre: '' })
@@ -226,10 +228,23 @@ function estadoRecibido(imei: any): string {
   return estado || 'RECIBIDO'
 }
 
-function getNombreTelefono(id_equi: number | null): string {
-  if (!id_equi) return ''
-  const tel = telefonos.value.find(t => t.id === id_equi)
-  return tel?.nombre || ''
+function getTelefonoRecibido(reference: any): any | null {
+  const recibido = reference && typeof reference === 'object' ? reference : { id_equi: reference }
+  const telefonoUid = String(recibido.telefono_uid || '').trim()
+  if (telefonoUid) {
+    return telefonos.value.find((telefono: any) => String(telefono.uid || '') === telefonoUid) || null
+  }
+  // Compatibilidad exclusiva con registros antiguos que aun no tienen telefono_uid.
+  const equipoId = Number(recibido.id_equi)
+  if (Number.isFinite(equipoId) && equipoId > 0) {
+    return telefonos.value.find((telefono: any) => Number(telefono.id) === equipoId) || null
+  }
+  return null
+}
+
+function getNombreTelefono(reference: any): string {
+  const recibido = reference && typeof reference === 'object' ? reference : null
+  return getTelefonoRecibido(reference)?.nombre || recibido?.equipo || recibido?.telefono_modelo || ''
 }
 
 const recibidosFiltrados = computed(() => {
@@ -244,7 +259,7 @@ const recibidosFiltrados = computed(() => {
       nd.customer_name?.toLowerCase().includes(texto) ||
       nd.customer_phone?.toLowerCase().includes(texto) ||
       nd.customer_cedula?.toLowerCase().includes(texto) ||
-      getNombreTelefono(a.id_equi)?.toLowerCase().includes(texto) ||
+      getNombreTelefono(a)?.toLowerCase().includes(texto) ||
       a.color?.toLowerCase().includes(texto) ||
       a.capacidad?.toLowerCase().includes(texto)
     )
@@ -341,7 +356,7 @@ function recibidoPdfHtml(recibido: any, empresa: any): string {
   </style></head><body><main class="page"><div class="top"></div><header class="header"><div class="brand"><h1>${escapePdf(empresaNombre)}</h1><p>${escapePdf(empresa.direccion || '')}</p><p>${escapePdf([empresa.telefono, empresa.email].filter(Boolean).join(' • '))}</p></div><div class="doc"><small>COMPROBANTE DE RECEPCIÓN</small><h2>Equipo recibido</h2><span class="badge">${escapePdf(numero)}</span></div></header>
   <section class="meta"><div class="box"><span>Fecha de recepción</span><strong>${escapePdf(fecha)}</strong></div><div class="box"><span>Almacén</span><strong>${escapePdf(almacenNombre)}</strong></div><div class="box"><span>Estado</span><strong>${escapePdf(estadoRecibido(recibido))}</strong></div></section>
   <h3 class="title">Datos del cliente</h3><section class="grid"><div class="panel"><div class="row"><span>Nombre</span><strong>${escapePdf(cliente.customer_name || '-')}</strong></div><div class="row"><span>Cédula / RNC</span><strong>${escapePdf(cliente.customer_cedula || '-')}</strong></div><div class="row"><span>Teléfono</span><strong>${escapePdf(cliente.customer_phone || '-')}</strong></div></div><div class="panel"><div class="row"><span>Nota de crédito</span><strong>${escapePdf(cliente.credit_note_no || 'Pendiente')}</strong></div><div class="row"><span>Fecha NC</span><strong>${escapePdf(cliente.credit_note_date || '-')}</strong></div><div class="row"><span>Referencia</span><strong>${escapePdf(numero)}</strong></div></div></section>
-  <h3 class="title">Equipo recibido</h3><section class="panel"><div class="row"><span>Modelo</span><strong>${escapePdf(getNombreTelefono(recibido.id_equi) || recibido.equipo || '-')}</strong></div><div class="row"><span>IMEI</span><strong>${escapePdf(recibido.nombre || '-')}</strong></div><div class="row"><span>Color</span><strong>${escapePdf(recibido.color || '-')}</strong></div><div class="row"><span>Capacidad</span><strong>${escapePdf(recibido.capacidad || '-')}</strong></div></section>
+  <h3 class="title">Equipo recibido</h3><section class="panel"><div class="row"><span>Modelo</span><strong>${escapePdf(getNombreTelefono(recibido) || recibido.equipo || '-')}</strong></div><div class="row"><span>IMEI</span><strong>${escapePdf(recibido.nombre || '-')}</strong></div><div class="row"><span>Color</span><strong>${escapePdf(recibido.color || '-')}</strong></div><div class="row"><span>Capacidad</span><strong>${escapePdf(recibido.capacidad || '-')}</strong></div></section>
   <section class="amounts"><div class="amount"><span class="label">Precio de recepción</span><strong>${escapePdf(precioRecepcion)}</strong></div></section>
   <div class="notice"><strong>Constancia:</strong> El cliente entrega el equipo descrito y confirma que los datos suministrados son correctos. La recepción queda sujeta a revisión física y técnica.</div>
   <section class="signatures"><div class="signature">Firma del cliente</div><div class="signature">Firma del representante</div></section><footer class="footer"><span>Generado por TM POS</span><span>${escapePdf(new Date().toLocaleString(systemLocale.value))}</span></footer></main></body></html>`
@@ -389,10 +404,12 @@ async function cargarRecibidos() {
   try {
     const res = await window.db.getAll('imei')
     if (res.success) {
+      const todos = res.data || []
       const lista = verTodosAlmacenes.value
-        ? (res.data || [])
-        : filterByAlmacen(res.data || [])
+        ? todos
+        : filterByAlmacen(todos)
       recibidos.value = lista.filter(esEquipoRecibido)
+      tableRenderKey.value++
       const ids = new Set(recibidos.value.map((item: any) => item.id))
       recibidosSeleccionados.value = recibidosSeleccionados.value.filter((item: any) => ids.has(item.id))
     }
@@ -479,8 +496,8 @@ function abrirEditar(recibido: any) {
   const nd = getNotaDataFromImei(recibido)
   form.value = {
     nombre: recibido.nombre || '',
-    id_equi: recibido.id_equi || null,
-    telefono_modelo: getNombreTelefono(recibido.id_equi),
+    id_equi: getTelefonoRecibido(recibido)?.id ?? (recibido.telefono_uid ? null : recibido.id_equi ?? null),
+    telefono_modelo: getNombreTelefono(recibido),
     color: recibido.color || '',
     capacidad: recibido.capacidad || '',
     precio_venta: recibido.precio_venta || 0,
@@ -600,65 +617,6 @@ async function crearTelefono() {
   }
 }
 
-async function crearNotaCreditoInterna(recibido: any) {
-  const result = await ensureRecibidoCreditNote(recibido, {
-    almacenId: almacenStore.activeId || 0,
-    almacenUid: almacenStore.activeUid || '',
-    productName: getNombreTelefono(recibido.id_equi) || recibido.nombre || '',
-  })
-  if (result?.created) toast.add({ severity: 'success', summary: 'Nota de Credito', detail: `${result.factura.no_factura} por ${formatCurrency(result.factura.total)}`, life: 4000 })
-  return result?.recibido || recibido
-  /* Legacy implementation retained temporarily below; all calls return through the shared service. */
-  try {
-    const nd = JSON.parse(recibido.nota || '{}')
-    if (!nd.credit_note_value || nd.credit_note_value <= 0) return
-    const nombreCliente = (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase()
-    const codCliente = nd.cliente_id || ''
-    const now = new Date()
-    const y = now.getFullYear()
-    const m = String(now.getMonth() + 1).padStart(2, '0')
-    const d2 = String(now.getDate()).padStart(2, '0')
-    const h = String(now.getHours()).padStart(2, '0')
-    const min = String(now.getMinutes()).padStart(2, '0')
-    const s = String(now.getSeconds()).padStart(2, '0')
-    const noCredito = `NC-${y}${m}${d2}-${h}${min}${s}`
-    const fechaStr = `${y}-${m}-${d2}`
-
-    const res = await window.db.insert('facturas', addAlmacenId({
-      no_factura: noCredito,
-      tipo_factura: 'NOTA_CREDITO',
-      cod_cliente: codCliente,
-      nombre_cliente: nombreCliente,
-      telefono_cliente: nd.customer_phone || '',
-      productos: JSON.stringify([{
-        nombre: `RECIBIDO: ${getNombreTelefono(recibido.id_equi) || recibido.nombre || ''}`,
-        cantidad: 1,
-        precio: nd.credit_note_value,
-        total: nd.credit_note_value,
-      }]),
-      total: nd.credit_note_value,
-      subtotal: nd.credit_note_value,
-      metodo_pago: 'EFECTIVO',
-      estado_factura: 'PENDIENTE',
-      fecha_emision: fechaStr,
-      fecha_estado: fechaStr,
-      hora: `${h}:${min}`,
-      nota: `NOTA DE CREDITO POR EQUIPO RECIBIDO IMEI: ${recibido.nombre || ''}`,
-      referencia_origen: `RECIBIDO:${recibido.id}`,
-      mes: m,
-      year: String(y),
-    }))
-
-    if (res.success) {
-      nd.credit_note_id = res.data.id
-      nd.credit_note_no = noCredito
-      nd.credit_note_date = fechaStr
-      await window.db.update('imei', recibido.id, { nota: JSON.stringify(nd) })
-      toast.add({ severity: 'success', summary: 'Nota de Credito', detail: `${noCredito} por ${formatCurrency(nd.credit_note_value)}`, life: 4000 })
-    }
-  } catch {}
-}
-
 async function cargarClientes() {
   try {
     const res = await window.db.getAll('clientes')
@@ -682,6 +640,12 @@ async function guardarRecibir() {
   }
   if (form.value.nombre.trim() && form.value.nombre.trim().length !== 15) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El IMEI debe tener 15 digitos', life: 3000 })
+    return
+  }
+
+  const telefonoSeleccionado = getTelefonoRecibido(form.value.id_equi)
+  if (form.value.id_equi && !String(telefonoSeleccionado?.uid || '')) {
+    toast.add({ severity: 'warn', summary: 'Modelo sin UID', detail: 'El modelo seleccionado debe estar sincronizado con TM Cloud antes de recibir el equipo', life: 4500 })
     return
   }
 
@@ -716,9 +680,9 @@ async function guardarRecibir() {
     }
     const data: any = {
       nombre: form.value.nombre.trim().toUpperCase(),
-      id_equi: form.value.id_equi,
-      telefono_uid: telefonos.value.find((telefono: any) => Number(telefono.id) === Number(form.value.id_equi))?.uid || '',
-      equipo: getNombreTelefono(form.value.id_equi),
+      id_equi: telefonoSeleccionado?.id ?? form.value.id_equi,
+      telefono_uid: telefonoSeleccionado?.uid || '',
+      equipo: telefonoSeleccionado?.nombre || form.value.telefono_modelo || '',
       color: form.value.color.trim().toUpperCase(),
       capacidad: form.value.capacidad.trim().toUpperCase(),
       costo: Number(nd.credit_note_value || 0),
@@ -739,10 +703,12 @@ async function guardarRecibir() {
       const res = await window.db.insert('imei', addAlmacenId({ ...data }))
       if (res.success) {
         toast.add({ severity: 'success', summary: 'Recibido', detail: 'Equipo recibido correctamente', life: 3000 })
-        const nuevoRecibido = { id: res.data.id, ...data }
-        const ncVal = nd.credit_note_value
-        if (ncVal && ncVal > 0) {
-          await crearNotaCreditoInterna(nuevoRecibido)
+        if (Number(nd.credit_note_value || 0) > 0) {
+          await ensureRecibidoCreditNote({ id: res.data.id, ...data }, {
+            almacenId: almacenStore.activeId || 0,
+            almacenUid: almacenStore.activeUid || '',
+            productName: telefonoSeleccionado?.nombre || data.nombre,
+          })
         }
       } else {
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo guardar', life: 3000 })
@@ -916,7 +882,7 @@ async function generarNotaCredito(recibido: any) {
     const result = await ensureRecibidoCreditNote(recibido, {
       almacenId: almacenStore.activeId || 0,
       almacenUid: almacenStore.activeUid || '',
-      productName: getNombreTelefono(recibido.id_equi) || recibido.nombre || '',
+      productName: getNombreTelefono(recibido) || recibido.nombre || '',
     })
     if (!result) throw new Error('Establece un valor para la nota de credito')
     toast.add({
@@ -926,56 +892,6 @@ async function generarNotaCredito(recibido: any) {
       life: 4000,
     })
     await cargarRecibidos()
-    return
-    /* Legacy implementation retained temporarily below; all calls return through the shared service. */
-    const nombreCliente = (nd.customer_name || 'CONSUMIDOR FINAL').toUpperCase()
-    const codCliente = nd.cliente_id || ''
-    const now = new Date()
-    const y = now.getFullYear()
-    const m = String(now.getMonth() + 1).padStart(2, '0')
-    const d = String(now.getDate()).padStart(2, '0')
-    const h = String(now.getHours()).padStart(2, '0')
-    const min = String(now.getMinutes()).padStart(2, '0')
-    const s = String(now.getSeconds()).padStart(2, '0')
-    const noCredito = `NC-${y}${m}${d}-${h}${min}${s}`
-    const fechaStr = `${y}-${m}-${d}`
-    const horaStr = `${h}:${min}`
-
-    const res = await window.db.insert('facturas', addAlmacenId({
-      no_factura: noCredito,
-      tipo_factura: 'NOTA_CREDITO',
-      cod_cliente: codCliente,
-      nombre_cliente: nombreCliente,
-      telefono_cliente: nd.customer_phone || '',
-      productos: JSON.stringify([{
-        nombre: `RECIBIDO: ${getNombreTelefono(recibido.id_equi) || recibido.nombre}`,
-        cantidad: 1,
-        precio: nd.credit_note_value,
-        total: nd.credit_note_value,
-      }]),
-      total: nd.credit_note_value,
-      subtotal: nd.credit_note_value,
-      metodo_pago: 'EFECTIVO',
-      estado_factura: 'PENDIENTE',
-      fecha_emision: fechaStr,
-      fecha_estado: fechaStr,
-      hora: horaStr,
-      nota: `NOTA DE CREDITO POR EQUIPO RECIBIDO IMEI: ${recibido.nombre}`,
-      referencia_origen: `RECIBIDO:${recibido.id}`,
-      mes: m,
-      year: String(y),
-    }))
-
-    if (res.success) {
-      nd.credit_note_id = res.data.id
-      nd.credit_note_no = noCredito
-      nd.credit_note_date = fechaStr
-      await window.db.update('imei', recibido.id, { nota: JSON.stringify(nd) })
-      toast.add({ severity: 'success', summary: 'Nota de Credito', detail: `${noCredito} por ${formatCurrency(nd.credit_note_value)}`, life: 4000 })
-      await cargarRecibidos()
-    } else {
-      toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo generar la nota de credito', life: 3000 })
-    }
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message, life: 3000 })
   } finally {
@@ -1001,9 +917,9 @@ async function enviarAlTaller() {
     const res = await window.db.insert('ordenes_taller', addAlmacenId({
       nombre: nombreCliente.toUpperCase(),
       telefono: nd.customer_phone || '',
-      equipo: getNombreTelefono(selectedRecibido.value.id_equi) || 'TELEFONO',
+      equipo: getNombreTelefono(selectedRecibido.value) || 'TELEFONO',
       imei: selectedRecibido.value.nombre || '',
-      marca_modelo: (getNombreTelefono(selectedRecibido.value.id_equi) || '') + ' ' + (selectedRecibido.value.color || '') + ' ' + (selectedRecibido.value.capacidad || ''),
+      marca_modelo: (getNombreTelefono(selectedRecibido.value) || '') + ' ' + (selectedRecibido.value.color || '') + ' ' + (selectedRecibido.value.capacidad || ''),
       accesorios: tallerForm.value.accesorios.toUpperCase(),
       fallas: tallerForm.value.fallas.toUpperCase(),
       tecnico: tallerForm.value.tecnico.toUpperCase(),
@@ -1050,11 +966,11 @@ async function publicarComoImei() {
   }
 
   const telefonoUidActual = String(selectedRecibido.value.telefono_uid || '')
-  const equipoAsignado = telefonosAlmacenActual.value.find((telefono: any) =>
-    Boolean(telefonoUidActual) && String(telefono.uid || '') === telefonoUidActual
-  ) || telefonosAlmacenActual.value.find((telefono: any) =>
-    Number(telefono.id) === Number(selectedRecibido.value.id_equi)
-  )
+  const equipoAsignado = telefonoUidActual
+    ? telefonosAlmacenActual.value.find((telefono: any) => String(telefono.uid || '') === telefonoUidActual)
+    : telefonosAlmacenActual.value.find((telefono: any) =>
+        Number(telefono.id) === Number(selectedRecibido.value.id_equi)
+      )
 
   if (!equipoAsignado || !String(equipoAsignado.uid || '')) {
     toast.add({
@@ -1110,6 +1026,10 @@ onMounted(async () => {
   } catch (_) {}
 
   await almacenStore.load()
+  await Promise.all([cargarRecibidos(), cargarTelefonos()])
+})
+
+useCloudRefresh(['imei', 'telefonos'], async () => {
   await Promise.all([cargarRecibidos(), cargarTelefonos()])
 })
 </script>
@@ -1175,6 +1095,7 @@ onMounted(async () => {
 
       <DataTable
         v-if="viewMode === 'table'"
+        :key="tableRenderKey"
         :value="recibidosFiltrados"
         :loading="loading"
         stripedRows
@@ -1189,7 +1110,7 @@ onMounted(async () => {
         <Column field="id" header="ID" style="width: 4rem" />
         <Column header="Modelo" sortable style="width: 10rem">
           <template #body="{ data }">
-            {{ getNombreTelefono(data.id_equi) || 'SIN MODELO' }}
+            {{ getNombreTelefono(data) || 'SIN MODELO' }}
           </template>
         </Column>
         <Column field="nombre" header="IMEI" sortable style="width: 10rem" />
@@ -1270,7 +1191,7 @@ onMounted(async () => {
               <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">{{ estadoRecibido(recibido) }}</span>
             </div>
             <div class="min-w-0">
-              <h4 class="font-bold text-base leading-tight truncate">{{ getNombreTelefono(recibido.id_equi) || 'SIN MODELO' }}</h4>
+              <h4 class="font-bold text-base leading-tight truncate">{{ getNombreTelefono(recibido) || 'SIN MODELO' }}</h4>
               <p class="text-sm text-surface-500 dark:text-surface-400 truncate">IMEI: {{ recibido.nombre || '—' }}</p>
               <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ getNotaDataFromImei(recibido).customer_name || 'Sin cliente' }}</p>
               <p class="text-sm text-surface-500 dark:text-surface-400 truncate">Cedula: {{ getNotaDataFromImei(recibido).customer_cedula || '-' }}</p>
@@ -1430,7 +1351,7 @@ onMounted(async () => {
         <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 space-y-2 text-sm">
           <div class="flex justify-between">
             <span class="text-surface-500">Modelo</span>
-            <span class="font-semibold">{{ getNombreTelefono(selectedRecibido.id_equi) || 'SIN MODELO' }}</span>
+            <span class="font-semibold">{{ getNombreTelefono(selectedRecibido) || 'SIN MODELO' }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-surface-500">IMEI</span>
@@ -1457,7 +1378,7 @@ onMounted(async () => {
         <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-3 text-sm">
           <div class="flex justify-between">
             <span class="text-surface-500">Equipo</span>
-            <span class="font-semibold">{{ getNombreTelefono(selectedRecibido.id_equi) || selectedRecibido.nombre }}</span>
+            <span class="font-semibold">{{ getNombreTelefono(selectedRecibido) || selectedRecibido.nombre }}</span>
           </div>
         </div>
         <InputText v-model="tallerForm.tecnico" placeholder="Nombre del tecnico" class="uppercase w-full" style="text-transform: uppercase;" />
@@ -1475,7 +1396,7 @@ onMounted(async () => {
         <div class="rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 p-3 text-sm space-y-1">
           <div class="flex justify-between gap-3">
             <span class="text-surface-500">Modelo</span>
-            <span class="font-semibold text-right truncate">{{ getNombreTelefono(selectedRecibido.id_equi) || 'SIN MODELO' }}</span>
+            <span class="font-semibold text-right truncate">{{ getNombreTelefono(selectedRecibido) || 'SIN MODELO' }}</span>
           </div>
           <div class="flex justify-between gap-3">
             <span class="text-surface-500">IMEI</span>

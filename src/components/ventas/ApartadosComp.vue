@@ -46,6 +46,7 @@ const accesoriosDisponibles = ref<any[]>([])
 const clientes = ref<any[]>([])
 const loading = ref(false)
 const dialogNuevo = ref(false)
+const tabNuevoActiva = ref(0)
 const dialogPago = ref(false)
 const dialogDetalle = ref(false)
 const deleteDialogVisible = ref(false)
@@ -308,6 +309,7 @@ async function cargarClientes() {
 }
 
 async function abrirNuevo() {
+  tabNuevoActiva.value = 0
   await recargarInventarioApartados()
   const n = new Date()
   form.value = {
@@ -850,7 +852,7 @@ onActivated(async () => {
     </Dialog>
 
     <Dialog v-model:visible="dialogNuevo" header="Nuevo Apartado" modal :style="{ width: 'min(34rem, 94vw)' }">
-      <TabView>
+      <TabView v-model:activeIndex="tabNuevoActiva">
         <TabPanel header="Cliente">
           <div class="flex flex-col gap-3 pt-2">
             <div class="flex flex-col gap-1">
@@ -974,7 +976,7 @@ onActivated(async () => {
       </TabView>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogNuevo = false" />
-        <Button label="Crear Apartado" icon="pi pi-check" @click="guardarNuevoApartado" />
+        <Button label="Crear Apartado" icon="pi pi-check" :disabled="tabNuevoActiva !== 2" @click="guardarNuevoApartado" />
       </template>
     </Dialog>
 

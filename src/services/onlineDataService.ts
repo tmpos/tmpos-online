@@ -48,6 +48,10 @@ type CloudTableSchema = { columns: Array<{ name: string }> }
 const CLOUD_SCHEMA_CACHE_TTL_MS = 15000
 const cloudSchemaChecks = new Map<string, Promise<void>>()
 let cloudSchemaCache: { tables: Record<string, CloudTableSchema>; fetchedAt: number } | null = null
+let cloudSchemaFetch: Promise<Record<string, CloudTableSchema>> | null = null
+const CLOUD_DATA_CACHE_TTL_MS = 5000
+const cloudDataCache = new Map<string, { rows: any[]; fetchedAt: number }>()
+const cloudDataFetches = new Map<string, Promise<any[]>>()
 const CLOUD_EXCLUDED_LOCAL_COLUMNS = new Set(['id', 'almacen_id', 'sync_status', 'last_synced_at', '_rowid'])
 const CLOUD_FALLBACK_SCHEMAS: Record<string, CloudColumnDefinition[]> = {
   capacidades: [
@@ -123,19 +127,29 @@ async function cloudRequest(path: string, init: RequestInit = {}, write = false)
     throw error
   }
   const api = cloudApi(write)
-  try {
-    const response = await fetch(`${api.url}${path}`, {
-      ...init,
-      cache: 'no-store',
-      headers: { ...tmCloud.authHeaders(api.key, Boolean(init.body)), ...(init.headers || {}) },
-    })
-    if (!response.ok) throw new Error(await tmCloud.responseError(response))
+  let response: Response | null = null
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      response = await fetch(`${api.url}${path}`, {
+        ...init,
+        cache: 'no-store',
+        headers: { ...tmCloud.authHeaders(api.key, Boolean(init.body)), ...(init.headers || {}) },
+      })
+    } catch (error) {
+      // fetch solo rechaza por un problema real de red. Los errores HTTP y de
+      // contenido pertenecen a la operacion solicitada y no deben declarar toda
+      // la aplicacion sin conexion.
+      markOffline(error)
+      throw error
+    }
     markOnline()
-    return await response.json().catch(() => ({}))
-  } catch (error) {
-    markOffline(error)
-    throw error
+    if (response.status !== 429 || attempt === 3) break
+    const retryAfter = Number(response.headers.get('retry-after') || 0)
+    await new Promise(resolve => setTimeout(resolve, retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1)))
   }
+  if (!response) throw new Error('TM Cloud no respondio')
+  if (!response.ok) throw new Error(await tmCloud.responseError(response))
+  return await response.json().catch(() => ({}))
 }
 
 function cloudColumnType(value: unknown): string {
@@ -176,12 +190,20 @@ async function fetchCloudSchema(force = false): Promise<Record<string, CloudTabl
   if (!force && cloudSchemaCache && Date.now() - cloudSchemaCache.fetchedAt < CLOUD_SCHEMA_CACHE_TTL_MS) {
     return cloudSchemaCache.tables
   }
-  const response = await cloudRequest('/schema')
-  const tables = response?.data && typeof response.data === 'object' ? response.data : {}
-  cloudSchemaCache = { tables, fetchedAt: Date.now() }
-  return tables
-}
+  if (!force && cloudSchemaFetch) return cloudSchemaFetch
 
+  const request = cloudRequest('/schema').then(response => {
+    const tables = response?.data && typeof response.data === 'object' ? response.data : {}
+    cloudSchemaCache = { tables, fetchedAt: Date.now() }
+    return tables
+  })
+  if (!force) cloudSchemaFetch = request
+  try {
+    return await request
+  } finally {
+    if (!force && cloudSchemaFetch === request) cloudSchemaFetch = null
+  }
+}
 async function desiredCloudColumns(tabla: string, data: Record<string, any> = {}): Promise<CloudColumnDefinition[]> {
   const local = await localCloudColumns(tabla)
   const fallback = CLOUD_FALLBACK_SCHEMAS[tabla] || []
@@ -232,7 +254,7 @@ export async function ensureOnlineTable(tablaValue: string, data: Record<string,
   return check
 }
 
-async function fetchAll(tabla: string): Promise<any[]> {
+async function fetchAllUncached(tabla: string): Promise<any[]> {
   await ensureOnlineTable(tabla)
   const rows: any[] = []
   for (let page = 1; ; page++) {
@@ -261,6 +283,30 @@ async function fetchAll(tabla: string): Promise<any[]> {
   return rows
 }
 
+async function fetchAll(tabla: string): Promise<any[]> {
+  const cached = cloudDataCache.get(tabla)
+  if (cached && Date.now() - cached.fetchedAt < CLOUD_DATA_CACHE_TTL_MS) return cached.rows
+
+  const pending = cloudDataFetches.get(tabla)
+  if (pending) return pending
+
+  const request = fetchAllUncached(tabla)
+    .then(rows => {
+      cloudDataCache.set(tabla, { rows, fetchedAt: Date.now() })
+      return rows
+    })
+    .catch(error => {
+      if (cached) return cached.rows
+      throw error
+    })
+    .finally(() => cloudDataFetches.delete(tabla))
+  cloudDataFetches.set(tabla, request)
+  return request
+}
+
+function invalidateCloudData(tabla: string) {
+  cloudDataCache.delete(tabla)
+}
 const ONLINE_IMAGE_METADATA_TABLE = 'datos_config'
 const ONLINE_IMAGE_PREFIX = '__tmpos_imagen__:'
 const ONLINE_IMAGE_TABLES = new Set(['accesorios', 'telefonos', 'electrodomesticos', 'piezas'])
@@ -282,6 +328,7 @@ async function saveOnlineImage(tabla: string, rowKey: unknown, image: unknown): 
   try { metadata = await fetchAll(ONLINE_IMAGE_METADATA_TABLE) }
   catch { metadata = [] }
   const current = metadata.find(row => String(row.nombre || '') === name)
+  invalidateCloudData(ONLINE_IMAGE_METADATA_TABLE)
   const value = String(image || '')
   if (!value) {
     if (current) await cloudRequest(`/${ONLINE_IMAGE_METADATA_TABLE}/${encodeURIComponent(String(current.uid || current.id))}`, { method: 'DELETE' }, true)
@@ -405,6 +452,7 @@ export async function installOnlineDataService(): Promise<void> {
         const value = await cloudRequest(`/${encodeURIComponent(tabla)}`, { method: 'POST', body: JSON.stringify(record) }, true)
         const created = value?.data || value
         if (ONLINE_IMAGE_TABLES.has(tabla) && image) await saveOnlineImage(tabla, created?.uid || record.uid || created?.id, image)
+        invalidateCloudData(tabla)
         window.dispatchEvent(new CustomEvent('tmcloud:table-changed', { detail: { table: tablaValue, updated: 1 } }))
         return { success: true, data: { ...created, ...(image ? { imagen: image } : {}) } }
       } catch (error: any) { return { success: false, error: error.message } }
@@ -424,6 +472,7 @@ export async function installOnlineDataService(): Promise<void> {
           await cloudRequest(`/${encodeURIComponent(tabla)}/${encodeURIComponent(String(key))}`, { method: 'PUT', body: JSON.stringify(record) }, true)
         }
         if (ONLINE_IMAGE_TABLES.has(tabla) && hasImage) await saveOnlineImage(tabla, current.uid || current.id, image)
+        invalidateCloudData(tabla)
         window.dispatchEvent(new CustomEvent('tmcloud:table-changed', { detail: { table: tabla, updated: 1 } }))
         return { success: true, changes: 1 }
       } catch (error: any) { return { success: false, error: error.message } }
@@ -455,6 +504,7 @@ export async function installOnlineDataService(): Promise<void> {
         }
         await cloudRequest(`/${encodeURIComponent(tabla)}/${encodeURIComponent(String(current.uid || current.id))}`, { method: 'DELETE' }, true)
         if (ONLINE_IMAGE_TABLES.has(tabla)) await saveOnlineImage(tabla, current.uid || current.id, '')
+        invalidateCloudData(tabla)
         window.dispatchEvent(new CustomEvent('tmcloud:table-changed', { detail: { table: tabla, deleted: 1 } }))
         return { success: true, changes: 1, data: { cuentas_cobrar_eliminadas: cuentasCobrarEliminadas } }
       } catch (error: any) { return { success: false, error: error.message } }

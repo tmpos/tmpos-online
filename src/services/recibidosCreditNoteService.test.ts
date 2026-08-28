@@ -14,14 +14,15 @@ describe('notas de crédito de recibidos', () => {
     } }
   })
 
-  it('crea una sola factura y reutiliza la referencia al repetir', async () => {
+  it('crea una sola nota de credito y nunca una factura de venta', async () => {
     const recibido = { id: 7, nombre: '123456789012345', nota: JSON.stringify({ credit_note_value: 100, customer_name: 'Ana' }) }
     const first = await ensureRecibidoCreditNote(recibido, { almacenId: 1, almacenUid: 'a', productName: 'Teléfono' })
     const second = await ensureRecibidoCreditNote(recibido, { almacenId: 1, almacenUid: 'a', productName: 'Teléfono' })
     expect(first?.created).toBe(true)
     expect(second?.created).toBe(false)
     expect(invoices).toHaveLength(1)
-    expect(invoices[0]).toMatchObject({ referencia_origen: 'RECIBIDO:7', almacen_uid: 'a', tipo_factura: 'NOTA_CREDITO' })
+    expect(invoices[0]).toMatchObject({ referencia_origen: 'RECIBIDO:7', almacen_uid: 'a', tipo_factura: 'NOTA_CREDITO', metodo_pago: 'NOTA_CREDITO', canal_venta: 'NOTA_CREDITO' })
+    expect(invoices.some(row => row.tipo_factura === 'FACTURA_VENTA')).toBe(false)
     expect(updates.length).toBe(2)
   })
 })

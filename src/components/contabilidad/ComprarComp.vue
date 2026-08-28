@@ -6,8 +6,11 @@ import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
+import Textarea from 'primevue/textarea'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
+import Chip from 'primevue/chip'
 import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
 import Calendar from 'primevue/calendar'
@@ -19,12 +22,29 @@ import { useSystemModeStore } from '@/stores/systemMode'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import ColorSelect from '@/components/shared/ColorSelect.vue'
 import CapacitySelect from '@/components/shared/CapacitySelect.vue'
+import { guardarGastoOnline } from '@/services/gastosOnlineService'
 
 const toast = useToast()
 const systemMode = useSystemModeStore()
-const { addAlmacenId, filterByAlmacen } = useAlmacenFilter()
+const { addAlmacenId, filterByAlmacen, store: almacenStore } = useAlmacenFilter()
 const dialogNuevoProveedor = ref(false)
 const nuevoProveedor = ref({ nombre: '', telefono: '', email: '', direccion: '' })
+const dialogGastoCompra = ref(false)
+const bancosCompra = ref<any[]>([])
+const cargandoBancosCompra = ref(false)
+const gastoCompra = ref({ descripcion: 'ENVÍO', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null as number | null })
+const gastoCompraEdicion = ref({ descripcion: 'ENVÍO', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null as number | null })
+const metodosGastoCompra = [
+  { label: 'Efectivo', value: 'EFECTIVO' },
+  { label: 'Transferencia', value: 'TRANSFERENCIA' },
+]
+const colorRapidoVisible = ref(false)
+const colorRapidoNombre = ref('')
+const colorRapidoCodigo = ref('#000000')
+const colorRapidoDestino = ref<'imei' | 'serial'>('imei')
+const capacidadRapidaVisible = ref(false)
+const capacidadRapidaNombre = ref('')
+const capacidadRapidaDestino = ref<'imei' | 'serial'>('imei')
 
 
 const proveedores = ref<any[]>([])
@@ -44,11 +64,129 @@ const form = ref({
 
 const busqueda = ref('')
 const imeiData = ref({ nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 })
+const modoImeiCompra = ref<'individual' | 'lote'>('individual')
+const modosImeiCompra = [
+  { label: 'Individual', value: 'individual' },
+  { label: 'Por lote', value: 'lote' },
+]
+const imeiLoteTexto = ref('')
+const resultadoImeisLote = computed(() => {
+  const validos: string[] = []
+  let invalidos = 0
+  const grupos = imeiLoteTexto.value.split(/\D+/).filter(Boolean)
+  for (const grupo of grupos) {
+    if (grupo.length >= 15 && grupo.length % 15 === 0) {
+      for (let i = 0; i < grupo.length; i += 15) validos.push(grupo.slice(i, i + 15))
+    } else invalidos++
+  }
+  return { imeis: [...new Set(validos)], invalidos }
+})
 const accSearch = ref('')
 const accCantidad = ref(1)
 const accNuevo = ref({ nombre: '', costo: 0, precio_venta: 0, cantidad: 1, marca: null as number | null, categoria: null as number | null })
 const elecSearch = ref('')
 const serialData = ref({ nombre: '', id_equi: null as number | null, equipo_uid: '', electrodomestico_nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 })
+const modoSerialCompra = ref<'individual' | 'lote'>('individual')
+const modosSerialCompra = [
+  { label: 'Individual', value: 'individual' },
+  { label: 'Por lote', value: 'lote' },
+]
+const serialLoteTexto = ref('')
+const serialesLote = computed(() => {
+  const vistos = new Set<string>()
+  return serialLoteTexto.value.split(/[,\r\n]+/).map(item => item.trim()).filter(item => {
+    const clave = item.toUpperCase()
+    if (!item || vistos.has(clave)) return false
+    vistos.add(clave)
+    return true
+  })
+})
+
+function abrirColorRapido(destino: 'imei' | 'serial') {
+  colorRapidoDestino.value = destino
+  colorRapidoNombre.value = ''
+  colorRapidoCodigo.value = '#000000'
+  colorRapidoVisible.value = true
+}
+
+function seleccionarColorRapido(nombre: string) {
+  if (colorRapidoDestino.value === 'serial') serialData.value.color = nombre
+  else imeiData.value.color = nombre
+}
+
+async function guardarColorRapido() {
+  const nombre = colorRapidoNombre.value.trim().toUpperCase()
+  if (!nombre) return
+  if (!/^#[0-9A-F]{6}$/i.test(colorRapidoCodigo.value)) {
+    toast.add({ severity: 'warn', summary: 'Código inválido', detail: 'Selecciona un color válido', life: 3000 })
+    return
+  }
+  const existentes = await window.db.getAll('colores')
+  const repetido = existentes.success && (existentes.data || []).some((color: any) => String(color.nombre || '').toUpperCase() === nombre)
+  if (!repetido) {
+    const result = await window.db.insert('colores', { nombre, codigo: colorRapidoCodigo.value, estado: 'activo' })
+    if (!result.success) {
+      toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear el color', life: 4000 })
+      return
+    }
+  }
+  seleccionarColorRapido(nombre)
+  colorRapidoVisible.value = false
+  toast.add({ severity: repetido ? 'info' : 'success', summary: repetido ? 'Color seleccionado' : 'Color creado', detail: repetido ? `${nombre} ya estaba registrado` : `${nombre} fue creado y seleccionado`, life: 2500 })
+}
+
+function abrirCapacidadRapida(destino: 'imei' | 'serial') {
+  capacidadRapidaDestino.value = destino
+  capacidadRapidaNombre.value = ''
+  capacidadRapidaVisible.value = true
+}
+
+async function guardarCapacidadRapida() {
+  const nombre = capacidadRapidaNombre.value.trim().toUpperCase().replace(/\s+/g, '')
+  if (!nombre) return
+  const existentes = await window.db.getAll('capacidades')
+  const repetida = existentes.success && (existentes.data || []).some((item: any) => String(item.nombre || '').toUpperCase() === nombre)
+  if (!repetida) {
+    const result = await window.db.insert('capacidades', { nombre, estado: 'activo' })
+    if (!result.success) {
+      toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear la capacidad', life: 4000 })
+      return
+    }
+  }
+  if (capacidadRapidaDestino.value === 'serial') serialData.value.capacidad = nombre
+  else imeiData.value.capacidad = nombre
+  capacidadRapidaVisible.value = false
+  toast.add({ severity: repetida ? 'info' : 'success', summary: repetida ? 'Capacidad seleccionada' : 'Capacidad creada', detail: repetida ? `${nombre} ya estaba registrada` : `${nombre} fue creada y seleccionada`, life: 2500 })
+}
+
+async function abrirGastoCompra() {
+  gastoCompraEdicion.value = { ...gastoCompra.value }
+  dialogGastoCompra.value = true
+  cargandoBancosCompra.value = true
+  try {
+    const result = await window.db.getAll('bancos')
+    bancosCompra.value = result.success ? result.data || [] : []
+  } finally {
+    cargandoBancosCompra.value = false
+  }
+}
+
+function quitarGastoCompra() {
+  gastoCompra.value = { descripcion: 'ENVÍO', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null }
+}
+
+function aplicarGastoCompra() {
+  if (!gastoCompraEdicion.value.descripcion.trim() || Number(gastoCompraEdicion.value.monto || 0) <= 0) {
+    toast.add({ severity: 'warn', summary: 'Datos incompletos', detail: 'Indica el concepto y el monto del gasto', life: 3000 })
+    return
+  }
+  if (gastoCompraEdicion.value.metodo_pago === 'TRANSFERENCIA' && !gastoCompraEdicion.value.banco_id) {
+    toast.add({ severity: 'warn', summary: 'Banco requerido', detail: 'Selecciona el banco de donde saldrá el dinero', life: 3000 })
+    return
+  }
+  gastoCompra.value = { ...gastoCompraEdicion.value }
+  dialogGastoCompra.value = false
+}
 
 const modo = ref<'registrar' | 'historial'>('registrar')
 const historialCompras = ref<any[]>([])
@@ -314,28 +452,49 @@ async function cargarDatos() {
   }))
 }
 
-function agregarImeiAlCarrito() {
-  if (!imeiData.value.nombre.trim()) {
-    toast.add({ severity: 'warn', summary: 'IMEI requerido', detail: 'Ingresa el numero IMEI', life: 2000 })
-    return
-  }
-  cart.value.push({
-    tipo: 'imei',
-    imei: imeiData.value.nombre.trim(),
-    telefono_nombre: busqueda.value.trim().toUpperCase() || 'SIN MODELO',
-    color: imeiData.value.color.trim().toUpperCase(),
-    capacidad: imeiData.value.capacidad.trim().toUpperCase(),
-    costo: imeiData.value.costo,
-    precio_venta: imeiData.value.precio_venta,
-    precio_min: imeiData.value.precio_min,
-    precio_xmayor: imeiData.value.precio_xmayor,
-    proveedor: form.value.proveedor_nombre || '',
-    no_compra: form.value.no_factura || '',
-  })
-  imeiData.value = { nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 }
-  toast.add({ severity: 'success', summary: 'Agregado', detail: 'IMEI agregado a la compra', life: 2000 })
+function removerImeiLote(imei: string) {
+  imeiLoteTexto.value = resultadoImeisLote.value.imeis.filter(item => item !== imei).join('\n')
 }
 
+async function agregarImeiAlCarrito() {
+  const invalidos = modoImeiCompra.value === 'lote' ? resultadoImeisLote.value.invalidos : 0
+  if (invalidos > 0) {
+    toast.add({ severity: 'warn', summary: 'Revisa el lote', detail: 'Cada IMEI debe contener exactamente 15 dígitos', life: 3500 })
+    return
+  }
+  const candidatos = modoImeiCompra.value === 'lote'
+    ? resultadoImeisLote.value.imeis
+    : [imeiData.value.nombre.trim()].filter(Boolean)
+  if (candidatos.length === 0) {
+    toast.add({ severity: 'warn', summary: 'IMEI requerido', detail: modoImeiCompra.value === 'lote' ? 'Pega al menos un IMEI válido de 15 dígitos' : 'Ingresa el número IMEI', life: 2500 })
+    return
+  }
+  if (modoImeiCompra.value === 'individual' && !/^\d{15}$/.test(candidatos[0])) {
+    toast.add({ severity: 'warn', summary: 'IMEI inválido', detail: 'El IMEI debe contener exactamente 15 dígitos', life: 3000 })
+    return
+  }
+  const consulta = await window.db.getAll('imei')
+  const existentes = new Set((consulta.success ? consulta.data || [] : []).map((item: any) => String(item.nombre || item.imei || '').trim()))
+  const enCarrito = new Set(cart.value.filter((item: any) => item.tipo === 'imei').map((item: any) => String(item.imei || '').trim()))
+  const nuevos = candidatos.filter(imei => !existentes.has(imei) && !enCarrito.has(imei))
+  const duplicados = candidatos.length - nuevos.length
+  const datosComunes = {
+    tipo: 'imei', telefono_nombre: busqueda.value.trim().toUpperCase() || 'SIN MODELO',
+    color: imeiData.value.color.trim().toUpperCase(), capacidad: imeiData.value.capacidad.trim().toUpperCase(),
+    costo: imeiData.value.costo, precio_venta: imeiData.value.precio_venta,
+    precio_min: imeiData.value.precio_min, precio_xmayor: imeiData.value.precio_xmayor,
+    proveedor: form.value.proveedor_nombre || '', no_compra: form.value.no_factura || '',
+  }
+  cart.value.push(...nuevos.map(imei => ({ ...datosComunes, imei })))
+  if (nuevos.length > 0) {
+    imeiData.value = { nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 }
+    imeiLoteTexto.value = ''
+  }
+  const detalles = [`${nuevos.length} agregado(s)`]
+  if (duplicados > 0) detalles.push(`${duplicados} duplicado(s)`)
+  if (invalidos > 0) detalles.push(`${invalidos} inválido(s)`)
+  toast.add({ severity: nuevos.length > 0 ? 'success' : 'warn', summary: modoImeiCompra.value === 'lote' ? 'Lote procesado' : 'IMEI procesado', detail: detalles.join(', '), life: 3500 })
+}
 function agregarAccAlCarrito(acc: any) {
   const existente = cart.value.find((item: any) => item.tipo === 'accesorio' && item.accesorio_id === acc.id)
   if (existente) {
@@ -372,35 +531,45 @@ function agregarAccNuevoAlCarrito() {
   toast.add({ severity: 'success', summary: 'Agregado', detail: 'Nuevo accesorio agregado a la compra', life: 2000 })
 }
 
-function agregarSerialAlCarrito() {
-  if (!serialData.value.nombre.trim()) {
-    toast.add({ severity: 'warn', summary: 'Serial requerido', detail: 'Ingresa el numero de serial', life: 2000 })
+function removerSerialLote(serial: string) {
+  serialLoteTexto.value = serialesLote.value.filter(item => item !== serial).join(', ')
+}
+
+async function agregarSerialAlCarrito() {
+  const candidatos = modoSerialCompra.value === 'lote'
+    ? serialesLote.value
+    : [serialData.value.nombre.trim()].filter(Boolean)
+  if (candidatos.length === 0) {
+    toast.add({ severity: 'warn', summary: 'Serial requerido', detail: modoSerialCompra.value === 'lote' ? 'Ingresa los seriales separados por comas' : 'Ingresa el número de serial', life: 2500 })
     return
   }
   if (!serialData.value.id_equi) {
-    toast.add({ severity: 'warn', summary: 'Modelo requerido', detail: 'Selecciona o busca un modelo de electrodomestico', life: 2000 })
+    toast.add({ severity: 'warn', summary: 'Modelo requerido', detail: 'Selecciona o busca un modelo de electrodoméstico', life: 2500 })
     return
   }
-  cart.value.push({
-    tipo: 'serial',
-    serial: serialData.value.nombre.trim(),
-    id_equi: serialData.value.id_equi,
-    equipo_uid: serialData.value.equipo_uid,
+  const consulta = await window.db.getAll('serial')
+  const existentes = new Set((consulta.success ? consulta.data || [] : []).map((item: any) => String(item.nombre || item.serial || '').trim().toUpperCase()))
+  const enCarrito = new Set(cart.value.filter((item: any) => item.tipo === 'serial').map((item: any) => String(item.serial || '').trim().toUpperCase()))
+  const nuevos = candidatos.filter(serial => !existentes.has(serial.toUpperCase()) && !enCarrito.has(serial.toUpperCase()))
+  const duplicados = candidatos.length - nuevos.length
+  const datosComunes = {
+    tipo: 'serial', id_equi: serialData.value.id_equi, equipo_uid: serialData.value.equipo_uid,
     electrodomestico_nombre: serialData.value.electrodomestico_nombre,
-    color: serialData.value.color.trim().toUpperCase(),
-    capacidad: serialData.value.capacidad.trim().toUpperCase(),
-    costo: serialData.value.costo,
-    precio_venta: serialData.value.precio_venta,
-    precio_min: serialData.value.precio_min,
-    precio_xmayor: serialData.value.precio_xmayor,
-    proveedor: form.value.proveedor_nombre || '',
-    no_compra: form.value.no_factura || '',
-  })
-  serialData.value = { nombre: '', id_equi: null, equipo_uid: '', electrodomestico_nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 }
-  elecSearch.value = ''
-  toast.add({ severity: 'success', summary: 'Agregado', detail: 'Serial agregado a la compra', life: 2000 })
+    color: serialData.value.color.trim().toUpperCase(), capacidad: serialData.value.capacidad.trim().toUpperCase(),
+    costo: serialData.value.costo, precio_venta: serialData.value.precio_venta,
+    precio_min: serialData.value.precio_min, precio_xmayor: serialData.value.precio_xmayor,
+    proveedor: form.value.proveedor_nombre || '', no_compra: form.value.no_factura || '',
+  }
+  cart.value.push(...nuevos.map(serial => ({ ...datosComunes, serial })))
+  if (nuevos.length > 0) {
+    serialData.value = { nombre: '', id_equi: null, equipo_uid: '', electrodomestico_nombre: '', color: '', capacidad: '', costo: 0, precio_venta: 0, precio_min: 0, precio_xmayor: 0 }
+    serialLoteTexto.value = ''
+    elecSearch.value = ''
+  }
+  const detalles = [`${nuevos.length} agregado(s)`]
+  if (duplicados > 0) detalles.push(`${duplicados} duplicado(s)`)
+  toast.add({ severity: nuevos.length > 0 ? 'success' : 'warn', summary: modoSerialCompra.value === 'lote' ? 'Lote procesado' : 'Serial procesado', detail: detalles.join(', '), life: 3500 })
 }
-
 function quitarDelCarrito(index: number) {
   cart.value.splice(index, 1)
 }
@@ -412,13 +581,21 @@ const totalCompra = computed(() =>
   }, 0)
 )
 
+const montoGastoCompra = computed(() => Math.max(0, Number(gastoCompra.value.monto || 0)))
+const totalCompraConGasto = computed(() => totalCompra.value + montoGastoCompra.value)
+
 async function completarCompra() {
   if (cart.value.length === 0) {
     toast.add({ severity: 'warn', summary: 'Carrito vacio', detail: 'Agrega productos a la compra', life: 3000 })
     return
   }
+  if (montoGastoCompra.value > 0 && gastoCompra.value.metodo_pago === 'TRANSFERENCIA' && !gastoCompra.value.banco_id) {
+    toast.add({ severity: 'warn', summary: 'Banco requerido', detail: 'Selecciona el banco para registrar el gasto de la compra', life: 3000 })
+    return
+  }
   cargando.value = true
   let ok = 0
+  let gastoCreado = false
   let errors: string[] = []
   try {
     for (const item of cart.value) {
@@ -484,9 +661,29 @@ async function completarCompra() {
         else errors.push(`Accesorio ${item.nombre}: ${res.error}`)
       }
     }
+    if (ok > 0 && montoGastoCompra.value > 0) {
+      const ahora = new Date()
+      const fechaCompra = form.value.fecha instanceof Date ? form.value.fecha : ahora
+      const banco = bancosCompra.value.find((item: any) => Number(item.id) === Number(gastoCompra.value.banco_id || 0))
+      const gastoResult = await guardarGastoOnline({
+        cantidad: montoGastoCompra.value,
+        comentario: `COMPRA ${form.value.no_factura || 'S/N'} · ${gastoCompra.value.descripcion.trim().toUpperCase()}`,
+        metodo_pago: gastoCompra.value.metodo_pago,
+        banco_id: banco?.id || 0,
+        banco_uid: banco?.uid || '',
+        turno_id: null,
+        fecha: `${fechaCompra.getFullYear()}-${String(fechaCompra.getMonth() + 1).padStart(2, '0')}-${String(fechaCompra.getDate()).padStart(2, '0')}`,
+        hora: `${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`,
+        almacen_id: almacenStore.activeId || 0,
+        almacen_uid: almacenStore.activeUid || '',
+      })
+      if (gastoResult.success) gastoCreado = true
+      else errors.push(`Gasto de compra: ${gastoResult.error || 'No se pudo registrar'}`)
+    }
     if (ok > 0) {
-      toast.add({ severity: 'success', summary: 'Compra registrada', detail: `${ok} producto(s) procesados`, life: 3000 })
+      toast.add({ severity: 'success', summary: 'Compra registrada', detail: `${ok} producto(s) procesados${gastoCreado ? ' y gasto registrado' : ''}`, life: 3000 })
   cart.value = []
+  if (gastoCreado) quitarGastoCompra()
   await cargarDatos()
 }
 
@@ -596,18 +793,32 @@ onMounted(cargarDatos)
                     @click="busqueda = t.nombre"
                   >{{ t.nombre }}</button>
                 </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-xs font-semibold text-surface-500">Forma de entrada</span>
+                  <SelectButton v-model="modoImeiCompra" :options="modosImeiCompra" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" />
+                </div>
                 <div class="grid grid-cols-2 gap-2">
-                  <div class="space-y-1">
-                    <label class="text-xs font-medium">IMEI <span class="text-red-400">*</span></label>
-                    <InputText v-model="imeiData.nombre" placeholder="Numero IMEI" fluid class="text-sm" />
+                  <div class="space-y-1" :class="modoImeiCompra === 'lote' ? 'col-span-2' : ''">
+                    <label class="text-xs font-medium">{{ modoImeiCompra === 'lote' ? 'IMEIs por lote' : 'IMEI' }} <span class="text-red-400">*</span></label>
+                    <InputText v-if="modoImeiCompra === 'individual'" v-model="imeiData.nombre" placeholder="Número IMEI (15 dígitos)" inputmode="numeric" maxlength="15" fluid class="text-sm" />
+                    <Textarea v-else v-model="imeiLoteTexto" placeholder="Pega los IMEIs separados por líneas, espacios o comas" rows="4" fluid class="text-sm font-mono" />
+                    <div v-if="modoImeiCompra === 'lote'" class="space-y-2">
+                      <div v-if="resultadoImeisLote.imeis.length" class="flex flex-wrap gap-1.5 rounded-lg border border-surface-200 dark:border-surface-700 p-2">
+                        <Chip v-for="imei in resultadoImeisLote.imeis" :key="imei" :label="imei" removable class="text-xs font-mono" @remove="removerImeiLote(imei)" />
+                      </div>
+                      <div class="flex justify-between text-[11px]">
+                        <span class="text-surface-500">{{ resultadoImeisLote.imeis.length }} IMEI(s) válido(s) de 15 dígitos</span>
+                        <span v-if="resultadoImeisLote.invalidos" class="font-semibold text-red-500"><i class="pi pi-exclamation-triangle mr-1"></i>{{ resultadoImeisLote.invalidos }} entrada(s) inválida(s)</span>
+                      </div>
+                    </div>
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Color</label>
-                    <ColorSelect v-model="imeiData.color" class="text-sm" />
+                    <div class="flex gap-2"><ColorSelect v-model="imeiData.color" class="text-sm flex-1" /><Button icon="pi pi-plus" severity="info" outlined size="small" @click="abrirColorRapido('imei')" v-tooltip="'Crear color'" /></div>
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Capacidad</label>
-                    <CapacitySelect v-model="imeiData.capacidad" class="text-sm" />
+                    <div class="flex gap-2"><CapacitySelect v-model="imeiData.capacidad" class="text-sm flex-1" /><Button icon="pi pi-plus" severity="info" outlined size="small" @click="abrirCapacidadRapida('imei')" v-tooltip="'Crear capacidad'" /></div>
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Costo (RD$)</label>
@@ -622,7 +833,7 @@ onMounted(cargarDatos)
                     <InputNumber v-model="imeiData.precio_min" :min="0" fluid class="text-sm" @focus="(e) => e.target.select()" />
                   </div>
                 </div>
-                <Button label="Agregar IMEI a la Compra" icon="pi pi-plus" class="w-full" size="small" @click="agregarImeiAlCarrito" />
+                <Button :label="modoImeiCompra === 'lote' ? `Agregar ${resultadoImeisLote.imeis.length} IMEIs a la Compra` : 'Agregar IMEI a la Compra'" icon="pi pi-plus" class="w-full" size="small" :disabled="modoImeiCompra === 'lote' && (resultadoImeisLote.imeis.length === 0 || resultadoImeisLote.invalidos > 0)" @click="agregarImeiAlCarrito" />
               </div>
             </TabPanel>
 
@@ -686,18 +897,29 @@ onMounted(cargarDatos)
             @click="serialData.id_equi = e.id; serialData.equipo_uid = e.uid || ''; serialData.electrodomestico_nombre = e.nombre; elecSearch = e.nombre"
                   >{{ e.nombre }}</button>
                 </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-xs font-semibold text-surface-500">Forma de entrada</span>
+                  <SelectButton v-model="modoSerialCompra" :options="modosSerialCompra" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" />
+                </div>
                 <div class="grid grid-cols-2 gap-2">
-                  <div class="space-y-1">
-                    <label class="text-xs font-medium">Serial <span class="text-red-400">*</span></label>
-                    <InputText v-model="serialData.nombre" placeholder="Numero de serial" fluid class="text-sm" />
+                  <div class="space-y-1" :class="modoSerialCompra === 'lote' ? 'col-span-2' : ''">
+                    <label class="text-xs font-medium">{{ modoSerialCompra === 'lote' ? 'Seriales por lote' : 'Serial' }} <span class="text-red-400">*</span></label>
+                    <InputText v-if="modoSerialCompra === 'individual'" v-model="serialData.nombre" placeholder="Número de serial" fluid class="text-sm" />
+                    <Textarea v-else v-model="serialLoteTexto" placeholder="Ejemplo: SERIAL-001, SERIAL-002, SERIAL-003" rows="4" fluid class="text-sm font-mono" />
+                    <div v-if="modoSerialCompra === 'lote'" class="space-y-2">
+                      <div v-if="serialesLote.length" class="flex flex-wrap gap-1.5 rounded-lg border border-surface-200 dark:border-surface-700 p-2">
+                        <Chip v-for="serial in serialesLote" :key="serial" :label="serial" removable class="text-xs font-mono" @remove="removerSerialLote(serial)" />
+                      </div>
+                      <p class="text-[11px] text-surface-500">{{ serialesLote.length }} serial(es). Sepáralos utilizando comas.</p>
+                    </div>
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Color</label>
-                    <ColorSelect v-model="serialData.color" class="text-sm" />
+                    <div class="flex gap-2"><ColorSelect v-model="serialData.color" class="text-sm flex-1" /><Button icon="pi pi-plus" severity="info" outlined size="small" @click="abrirColorRapido('serial')" v-tooltip="'Crear color'" /></div>
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Capacidad</label>
-                    <CapacitySelect v-model="serialData.capacidad" class="text-sm" />
+                    <div class="flex gap-2"><CapacitySelect v-model="serialData.capacidad" class="text-sm flex-1" /><Button icon="pi pi-plus" severity="info" outlined size="small" @click="abrirCapacidadRapida('serial')" v-tooltip="'Crear capacidad'" /></div>
                   </div>
                   <div class="space-y-1">
                     <label class="text-xs font-medium">Costo (RD$)</label>
@@ -712,7 +934,7 @@ onMounted(cargarDatos)
                     <InputNumber v-model="serialData.precio_min" :min="0" fluid class="text-sm" @focus="(e) => e.target.select()" />
                   </div>
                 </div>
-                <Button label="Agregar Serial a la Compra" icon="pi pi-plus" class="w-full" size="small" @click="agregarSerialAlCarrito" />
+                <Button :label="modoSerialCompra === 'lote' ? `Agregar ${serialesLote.length} seriales a la Compra` : 'Agregar Serial a la Compra'" icon="pi pi-plus" class="w-full" size="small" :disabled="modoSerialCompra === 'lote' && serialesLote.length === 0" @click="agregarSerialAlCarrito" />
               </div>
             </TabPanel>
           </TabView>
@@ -747,9 +969,18 @@ onMounted(cargarDatos)
             </div>
           </div>
           <div class="mt-auto border-t border-surface-200/50 dark:border-surface-700/30 p-4 space-y-2">
+            <div v-if="montoGastoCompra > 0" class="flex justify-between text-xs text-surface-500">
+              <span>Subtotal productos</span>
+              <span>{{ $formatMoney(totalCompra) }}</span>
+            </div>
+            <div v-if="montoGastoCompra > 0" class="flex items-center justify-between gap-2 rounded-lg bg-orange-50 dark:bg-orange-950/30 px-2.5 py-2 text-xs">
+              <div class="min-w-0"><span class="font-semibold text-orange-700 dark:text-orange-300">Gasto: {{ gastoCompra.descripcion }}</span><p class="text-[10px] text-surface-500">{{ gastoCompra.metodo_pago }}</p></div>
+              <div class="flex items-center gap-1"><span class="font-bold">{{ $formatMoney(montoGastoCompra) }}</span><Button icon="pi pi-pencil" severity="warn" text rounded size="small" @click="abrirGastoCompra" v-tooltip="'Editar gasto'" /><Button icon="pi pi-times" severity="danger" text rounded size="small" @click="quitarGastoCompra" v-tooltip="'Quitar gasto'" /></div>
+            </div>
+            <Button v-else label="Agregar gasto (envío, transporte...)" icon="pi pi-plus" severity="warn" outlined size="small" class="w-full" @click="abrirGastoCompra" />
             <div class="flex justify-between text-sm font-bold">
               <span>Total Compra</span>
-              <span class="text-primary">{{ $formatMoney(totalCompra) }}</span>
+              <span class="text-primary">{{ $formatMoney(totalCompraConGasto) }}</span>
             </div>
             <Button label="Completar Compra" icon="pi pi-check" class="w-full" :loading="cargando" :disabled="cart.length === 0" @click="completarCompra" />
           </div>
@@ -838,6 +1069,16 @@ onMounted(cargarDatos)
       </div>
     </div>
 
+    <Dialog v-model:visible="dialogGastoCompra" header="Gasto de la compra" modal :style="{ width: 'min(30rem, 94vw)' }">
+      <div class="flex flex-col gap-4 pt-2">
+        <div class="rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/30 p-3 text-xs text-orange-700 dark:text-orange-300">El gasto se registrará en Contabilidad al completar la compra y quedará identificado con el número de factura.</div>
+        <div class="flex flex-col gap-1"><label class="text-sm font-semibold">Concepto</label><InputText v-model="gastoCompraEdicion.descripcion" placeholder="Ejemplo: ENVÍO O TRANSPORTE" class="uppercase" fluid /></div>
+        <div class="flex flex-col gap-1"><label class="text-sm font-semibold">Monto</label><InputNumber v-model="gastoCompraEdicion.monto" :min="0" mode="currency" :currency="getSystemCurrencyCode()" :locale="getSystemLocale()" fluid @focus="(e) => e.target.select()" /></div>
+        <div class="flex flex-col gap-1"><label class="text-sm font-semibold">Método de pago</label><Select v-model="gastoCompraEdicion.metodo_pago" :options="metodosGastoCompra" optionLabel="label" optionValue="value" fluid @change="gastoCompraEdicion.banco_id = null" /></div>
+        <div v-if="gastoCompraEdicion.metodo_pago === 'TRANSFERENCIA'" class="flex flex-col gap-1"><label class="text-sm font-semibold">Banco</label><Select v-model="gastoCompraEdicion.banco_id" :options="bancosCompra" optionLabel="nombre" optionValue="id" placeholder="Seleccionar banco" filter fluid :loading="cargandoBancosCompra" /></div>
+      </div>
+      <template #footer><Button label="Cancelar" severity="secondary" text @click="dialogGastoCompra = false" /><Button label="Aplicar a la compra" icon="pi pi-check" severity="warn" :disabled="!gastoCompraEdicion.descripcion.trim() || Number(gastoCompraEdicion.monto) <= 0 || (gastoCompraEdicion.metodo_pago === 'TRANSFERENCIA' && !gastoCompraEdicion.banco_id)" @click="aplicarGastoCompra" /></template>
+    </Dialog>
     <Dialog v-model:visible="dialogNuevoProveedor" header="Nuevo Proveedor" modal :style="{ width: '28rem' }">
       <div class="flex flex-col gap-4 pt-2">
         <div class="space-y-1">
@@ -862,6 +1103,39 @@ onMounted(cargarDatos)
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogNuevoProveedor = false" />
         <Button label="Guardar y Seleccionar" icon="pi pi-check" @click="guardarNuevoProveedor" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="colorRapidoVisible" header="Nuevo color" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-3 pt-2">
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Nombre</label>
+          <InputText v-model="colorRapidoNombre" placeholder="Ejemplo: AZUL MARINO" class="uppercase" fluid @keyup.enter="guardarColorRapido" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Color visual</label>
+          <div class="flex items-center gap-3">
+            <input v-model="colorRapidoCodigo" type="color" class="w-14 h-11 rounded border border-surface-300 cursor-pointer bg-transparent p-1" />
+            <InputText v-model="colorRapidoCodigo" class="font-mono uppercase flex-1" maxlength="7" />
+            <span class="w-10 h-10 rounded-full border border-surface-300 shadow-sm" :style="{ backgroundColor: colorRapidoCodigo }"></span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="colorRapidoVisible = false" />
+        <Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!colorRapidoNombre.trim()" @click="guardarColorRapido" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="capacidadRapidaVisible" header="Nueva capacidad" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-2 pt-2">
+        <label class="font-semibold text-sm">Capacidad</label>
+        <InputText v-model="capacidadRapidaNombre" placeholder="Ejemplo: 128GB, 512GB, 220L" class="uppercase" fluid @keyup.enter="guardarCapacidadRapida" />
+        <small class="text-surface-500">Se guardará en mayúsculas y sin espacios.</small>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="capacidadRapidaVisible = false" />
+        <Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!capacidadRapidaNombre.trim()" @click="guardarCapacidadRapida" />
       </template>
     </Dialog>
   </div>

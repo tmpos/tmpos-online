@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { getLocaleProfile, getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted, watch } from 'vue'
+import { useCloudRefresh } from '@/composables/useCloudRefresh'
 import { useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -1007,6 +1008,8 @@ async function verFacturaPdf(factura: any) {
   await registrarAuditoria('generar_pdf', factura)
   facturaPdfRef.value?.printFactura(factura)
 }
+
+useCloudRefresh(['facturas', 'facturas_ecf'], cargarFacturas)
 
 onMounted(async () => {
   try {

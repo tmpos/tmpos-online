@@ -324,42 +324,135 @@ function getStorageWriteKey(): { key: string; type: 'secret' | 'public' } | null
   return null
 }
 
+function safeImageBaseName(fileName: string): string {
+  return String(fileName || 'imagen')
+    .replace(/\.[^.]+$/, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'imagen'
+}
+
+function imageType(file: File): string {
+  const declared = String(file.type || '').toLowerCase().split(';')[0]
+  if (declared === 'image/jpg') return 'image/jpeg'
+  if (declared) return declared
+  const extension = file.name.split('.').pop()?.toLowerCase()
+  if (extension === 'jpg' || extension === 'jpeg' || extension === 'jfif') return 'image/jpeg'
+  if (extension === 'png') return 'image/png'
+  if (extension === 'webp') return 'image/webp'
+  if (extension === 'avif') return 'image/avif'
+  return ''
+}
+
+async function convertImageToJpeg(file: File): Promise<File> {
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image()
+      element.onload = () => resolve(element)
+      element.onerror = () => reject(new Error(`No se pudo convertir ${file.name}`))
+      element.src = objectUrl
+    })
+    const maxDimension = 2400
+    const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error(`No se pudo procesar ${file.name}`)
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.88))
+    if (!blob) throw new Error(`No se pudo convertir ${file.name}`)
+    return new File([blob], `${safeImageBaseName(file.name)}.jpg`, { type: 'image/jpeg' })
+  } catch {
+    throw new Error(`${file.name}: formato no compatible. Usa una imagen JPG, PNG, WEBP o AVIF valida.`)
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+async function normalizeImageForUpload(file: File): Promise<File> {
+  const type = imageType(file)
+  const baseName = safeImageBaseName(file.name)
+  if (type === 'image/jpeg') return new File([file], `${baseName}.jpg`, { type })
+  if (type === 'image/png') return new File([file], `${baseName}.png`, { type })
+  if (type.startsWith('image/')) return convertImageToJpeg(file)
+  throw new Error(`${file.name}: el archivo seleccionado no es una imagen valida.`)
+}
+
 export async function uploadImage(file: File, directory: string): Promise<string> {
   await ensureConfigLoaded()
   const storageUrl = getStorageUrl()
   const auth = getStorageWriteKey()
   if (!storageUrl || !auth) throw new Error('TM Cloud no configurado')
+  let uploadFile = await normalizeImageForUpload(file)
 
-  const formData = new FormData()
-  formData.append('file', file)
-  formData.append('directory', directory)
-
-  const res = await fetch(`${storageUrl}/upload`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${auth.key}` },
-    body: formData,
-  })
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(
-      `HTTP ${res.status} (key: ${auth.type})` +
-      (text ? `: ${text.slice(0, 300)}` : '')
-    )
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const formData = new FormData()
+    formData.append('file', uploadFile, uploadFile.name)
+    formData.append('directory', directory)
+    const res = await fetch(`${storageUrl}/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${auth.key}` },
+      body: formData,
+    })
+    if (res.status === 429 && attempt < 3) {
+      const retryAfter = Number(res.headers.get('retry-after') || 0)
+      await new Promise(resolve => setTimeout(resolve, retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1)))
+      continue
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      const rejectedType = res.status === 400 && /file type is not allowed/i.test(text)
+      if (rejectedType && uploadFile.type !== 'image/jpeg' && attempt < 3) {
+        uploadFile = await convertImageToJpeg(uploadFile)
+        continue
+      }
+      if (rejectedType) throw new Error(`${file.name}: TM Cloud no admite este formato de imagen.`)
+      throw new Error(
+        `HTTP ${res.status} (key: ${auth.type})` +
+        (text ? `: ${text.slice(0, 300)}` : '')
+      )
+    }
+    const json = await res.json()
+    const uid = json.data?.uid || json.data?.id || json.file?.uid || json.uid || json.id || json.data?.url || json.url || ''
+    if (!uid) throw new Error('TM Cloud no devolvio el identificador de la imagen')
+    return uid
   }
-  const json = await res.json()
-  const uid = json.data?.uid || json.data?.id || json.file?.uid || json.uid || json.id || json.data?.url || json.url || ''
-  if (!uid) throw new Error('TM Cloud no devolvio el identificador de la imagen')
-  return uid
+  throw new Error('TM Cloud alcanzo el limite de solicitudes. Intenta nuevamente en unos segundos.')
 }
 
-export function getImageUrl(uid: string): string | null {
-  if (!uid) return null
-  if (/^(data:|https?:\/\/|blob:)/i.test(uid)) return uid
+export function getImageIds(value: unknown): string[] {
+  if (Array.isArray(value)) return [...new Set(value.map(item => String(item || '').trim()).filter(Boolean))]
+  const raw = String(value || '').trim()
+  if (!raw) return []
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return [...new Set(parsed.map(item => String(item || '').trim()).filter(Boolean))]
+    } catch { /* Compatibilidad con referencias antiguas. */ }
+  }
+  return [raw]
+}
+
+export function serializeImageIds(values: unknown[]): string {
+  const ids = getImageIds(values)
+  if (ids.length === 0) return ''
+  return ids.length === 1 ? ids[0] : JSON.stringify(ids)
+}
+
+export function getImageUrl(uid: unknown): string | null {
+  const imageId = getImageIds(uid)[0] || ''
+  if (!imageId) return null
+  if (/^(data:|https?:\/\/|blob:)/i.test(imageId)) return imageId
   const systemProjectApi = String((window as any).__systemProjectApiBase || '').replace(/\/+$/, '')
-  if (systemProjectApi && /^fil_[A-Za-z0-9]+$/i.test(uid)) return `${systemProjectApi}/storage/${encodeURIComponent(uid)}`
+  if (systemProjectApi && /^fil_[A-Za-z0-9]+$/i.test(imageId)) return `${systemProjectApi}/storage/${encodeURIComponent(imageId)}`
   const storageUrl = getStorageUrl()
   if (!storageUrl) return null
-  return `${storageUrl}/${uid}`
+  return `${storageUrl}/${imageId}`
 }
 
 export async function deleteImage(uid: string): Promise<boolean> {

@@ -19,7 +19,7 @@ function timestampParts(now = new Date()) {
   return { year, month, day, hour, minute, second }
 }
 
-/** Single entry point for automatic and manual credit notes created from received equipment. */
+/** Creates or reuses a received-equipment credit note without classifying it as a sale. */
 export async function ensureRecibidoCreditNote(
   recibido: any,
   options: { almacenId: number; almacenUid: string; productName?: string },
@@ -52,7 +52,8 @@ export async function ensureRecibidoCreditNote(
     productos: JSON.stringify([{ nombre: `RECIBIDO: ${options.productName || recibido.nombre || ''}`, cantidad: 1, precio: value, total: value }]),
     total: value,
     subtotal: value,
-    metodo_pago: 'EFECTIVO',
+    metodo_pago: 'NOTA_CREDITO',
+    canal_venta: 'NOTA_CREDITO',
     estado_factura: 'PENDIENTE',
     fecha_emision: date,
     fecha_estado: date,

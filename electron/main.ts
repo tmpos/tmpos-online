@@ -190,8 +190,13 @@ async function onlineCloudRequest(pathname: string, init: RequestInit = {}): Pro
     if (response.ok) return value
     const message = String(value?.error?.message || value?.error || value?.message || `TM Cloud respondio HTTP ${response.status}`)
     const databaseBusy = /database\s+is\s+locked|sqlstate\[hy000\].*(?:error:\s*5|database\s+is\s+locked)|sqlite_busy/i.test(message)
-    if (databaseBusy && attempt < maxAttempts - 1) {
-      await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
+    const rateLimited = response.status === 429
+    if ((databaseBusy || rateLimited) && attempt < maxAttempts - 1) {
+      const retryAfter = Number(response.headers.get('retry-after') || 0)
+      const delay = rateLimited
+        ? (retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1))
+        : 400 * (attempt + 1)
+      await new Promise(resolve => setTimeout(resolve, delay))
       continue
     }
     throw new Error(message)
@@ -245,7 +250,11 @@ function onlineImageKey(table: string, rowKey: unknown): string {
 
 async function saveOnlineImage(table: string, rowKey: unknown, image: unknown): Promise<void> {
   if (!ONLINE_IMAGE_TABLES.has(table) || !rowKey) return
-  await ensureOnlineCloudTable(ONLINE_IMAGE_METADATA_TABLE)
+  await ensureOnlineCloudTable(ONLINE_IMAGE_METADATA_TABLE, {
+    nombre: '',
+    valor: '',
+    identificadordb: '',
+  })
   const name = onlineImageKey(table, rowKey)
   let metadata: any[] = []
   try { metadata = await fetchOnlineTable(ONLINE_IMAGE_METADATA_TABLE) }
@@ -1899,16 +1908,18 @@ function setupIpcHandlers(): void {
   })
 
   // Importacion interna desde TM Cloud. A diferencia de db:insert/db:update,
-  // conserva exactamente el registro remoto: no agrega el almacen activo, no
-  // reemplaza timestamps y no genera miles de entradas de bitacora.
+  // conserva los campos remotos compatibles: no agrega el almacen activo, no
+  // reemplaza timestamps y no genera miles de entradas de bitacora. Las columnas
+  // que no existen localmente se ignoran para tolerar diferencias de esquema.
   ipcMain.handle('db:insertCloud', (_event, tabla: string, data: Record<string, any>) => {
     try {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tabla)) return { success: false, error: 'Nombre de tabla no valido' }
-      const keys = Object.keys(data || {})
+      const localColumns = new Set((db!.prepare(`PRAGMA table_info(${quoteIdentifier(tabla)})`).all() as any[]).map(column => String(column.name)))
+      const keys = Object.keys(data || {}).filter(key => localColumns.has(key))
       if (keys.length === 0) return { success: false, error: 'Registro remoto vacio' }
       const placeholders = keys.map(() => '?').join(', ')
       const columns = keys.map(key => `"${key}"`).join(', ')
-      const result = db!.prepare(`INSERT INTO "${tabla}" (${columns}) VALUES (${placeholders})`).run(...Object.values(data))
+      const result = db!.prepare(`INSERT INTO "${tabla}" (${columns}) VALUES (${placeholders})`).run(...keys.map(key => data[key]))
       return { success: true, data: { id: Number(result.lastInsertRowid) } }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -1918,10 +1929,11 @@ function setupIpcHandlers(): void {
   ipcMain.handle('db:updateCloud', (_event, tabla: string, id: number, data: Record<string, any>) => {
     try {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tabla)) return { success: false, error: 'Nombre de tabla no valido' }
-      const keys = Object.keys(data || {})
+      const localColumns = new Set((db!.prepare(`PRAGMA table_info(${quoteIdentifier(tabla)})`).all() as any[]).map(column => String(column.name)))
+      const keys = Object.keys(data || {}).filter(key => localColumns.has(key))
       if (keys.length === 0) return { success: true }
       const sets = keys.map(key => `"${key}" = ?`).join(', ')
-      db!.prepare(`UPDATE "${tabla}" SET ${sets} WHERE id = ?`).run(...Object.values(data), id)
+      db!.prepare(`UPDATE "${tabla}" SET ${sets} WHERE id = ?`).run(...keys.map(key => data[key]), id)
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }

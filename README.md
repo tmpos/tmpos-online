@@ -1,14 +1,14 @@
 # TMPOS Desktop
 
-[![Versión](https://img.shields.io/badge/versión-2.13.14-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.14)
-[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.13.14/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.13.14)
+[![Versión](https://img.shields.io/badge/versión-2.14.0-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.0)
+[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.14.0/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.0)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows)](https://github.com/tmpos/tmpos-online/releases/latest)
 
 Sistema profesional de punto de venta, inventario, facturación, taller y administración comercial, con funcionamiento offline y sincronización mediante TMCloud.
 
 ## Descargar TMPOS para Windows
 
-[![Descargar TMPOS v2.13.14 para Windows](https://img.shields.io/badge/Descargar_TMPOS-v2.13.14_Windows-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/download/v2.13.14/TMPOS.Setup.2.13.14.exe)
+[![Descargar TMPOS v2.14.0 para Windows](https://img.shields.io/badge/Descargar_TMPOS-v2.14.0_Windows-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/download/v2.14.0/TMPOS.Setup.2.14.0.exe)
 
 El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos existentes se conservan durante la actualización.
 
@@ -19,6 +19,15 @@ El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos ex
 Compatible con Macs Intel de 64 bits. Al no estar notarizada esta compilación, la primera apertura puede requerir clic derecho sobre TMPOS, seleccionar **Abrir** y confirmar.
 
 También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-online/releases/download/v2.13.13/TMPOS-2.13.13-x64.zip).
+
+## Novedades de v2.14.0
+
+- Apartados disponibles directamente desde las acciones del POS, con el mismo flujo de clientes, pagos, inventario e impresión del módulo de apartados.
+- Los botones para crear apartados permanecen deshabilitados hasta llegar al paso de pago, tanto en POS como en el componente de apartados.
+- Compras ampliadas con carga individual o por lote de IMEI y seriales mediante etiquetas removibles; cada IMEI se valida con exactamente 15 dígitos.
+- Creación rápida de colores y capacidades desde la compra, incluyendo la corrección visual del color recién agregado.
+- Registro opcional de gastos asociados a la compra, como envío o transporte, con concepto, método de pago y cuenta bancaria.
+- Mejoras de sincronización, refresco de inventario y manejo de notas de crédito en recibidos.
 
 ## Novedades de v2.13.14
 
@@ -158,7 +167,7 @@ También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/t
 
 ## Actualización
 
-1. Descarga `TMPOS.Setup.2.13.14.exe`.
+1. Descarga `TMPOS.Setup.2.14.0.exe`.
 2. Cierra TMPOS si está abierto.
 3. Ejecuta el instalador y conserva la ubicación actual.
 4. Abre TMPOS normalmente; tus datos locales permanecerán disponibles.

@@ -28,6 +28,7 @@ import TicketCuentaCobrarPrint from '@/components/contabilidad/TicketCuentaCobra
 import OrdenTallerForm from '@/components/taller/OrdenTallerForm.vue'
 import TicketTallerPrint from '@/components/taller/TicketTallerPrint.vue'
 import RecibirEquipoDialog from '@/components/ventas/RecibirEquipoDialog.vue'
+import NuevoApartadoDialog from '@/components/ventas/NuevoApartadoDialog.vue'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
@@ -63,6 +64,7 @@ const router = useRouter()
 const systemMode = useSystemModeStore()
 
 const activeTab = ref<string>(systemMode.isGeneralStore ? 'accesorios' : 'celulares')
+const nuevoApartadoRef = ref<InstanceType<typeof NuevoApartadoDialog> | null>(null)
 const tabOptions = computed(() => [
   ...(systemMode.isCellphoneStore ? [{ label: `Celulares (${contadorTelefonos.value})`, value: 'celulares', icon: 'pi pi-mobile' }] : []),
   { label: `${systemMode.productLabel} (${contadorAccesorios.value})`, value: 'accesorios', icon: 'pi pi-box' },
@@ -2660,55 +2662,73 @@ watch(productoDbFactCotiSeleccionado, () => {
   nuevoProductoFactCoti.value.cantidad = 1
 })
 
+async function cargarTablaPos(tabla: string, intentos = 2): Promise<any> {
+  let ultimo: any = { success: false, error: `No se pudo cargar ${tabla}` }
+  for (let intento = 0; intento < intentos; intento++) {
+    ultimo = await window.db.getAll(tabla)
+    if (ultimo?.success) return ultimo
+    if (intento + 1 < intentos) await new Promise(resolve => setTimeout(resolve, 400 * (intento + 1)))
+  }
+  return ultimo
+}
+
+let cargaProductosId = 0
 async function cargarProductos() {
-  try {
-    const [resTel, resAcc, resElec, resCli, resMar, resCat] = await Promise.all([
-      window.db.getAll('telefonos'),
-      window.db.getAll('accesorios'),
-      window.db.getAll('electrodomesticos'),
-      window.db.getAll('clientes'),
-      window.db.getAll('marcas'),
-      window.db.getAll('categorias'),
-    ])
-
-    if (resTel.success) telefonos.value = filterByAlmacen(resTel.data || [])
-    if (resAcc.success) accesorios.value = filterByAlmacen(resAcc.data || [])
-    if (resElec.success) electrodomesticos.value = filterByAlmacen(resElec.data || [])
-    if (resCli.success) clientes.value = resCli.data || []
-    if (resMar.success) marcas.value = resMar.data || []
-    if (resCat.success) categorias.value = resCat.data || []
-
-    const marcasMap = new Map(marcas.value.map(m => [m.id, m.nombre]))
-    const catsMap = new Map(categorias.value.map(c => [c.id, c.nombre]))
-
-    accesorios.value = accesorios.value.filter(a => (a.cantidad || 0) > 0)
-    accesorios.value = accesorios.value.map(a => ({
-      ...a,
-      marca_nombre: marcasMap.get(a.marca) || '',
-      categoria_nombre: catsMap.get(a.categoria) || '',
-    }))
-  } catch (error) {
-    console.error(error)
+  const cargaId = ++cargaProductosId
+  const asignar = (callback: () => void) => {
+    if (cargaId === cargaProductosId) callback()
   }
+
+  const tareas = [
+    cargarTablaPos('telefonos').then(res => {
+      if (res.success) asignar(() => { telefonos.value = filterByAlmacen(res.data || []) })
+    }),
+    cargarTablaPos('accesorios').then(res => {
+      if (res.success) asignar(() => {
+        accesorios.value = filterByAlmacen(res.data || []).filter((item: any) => Number(item.cantidad || 0) > 0)
+      })
+    }),
+    cargarTablaPos('electrodomesticos').then(res => {
+      if (res.success) asignar(() => { electrodomesticos.value = filterByAlmacen(res.data || []) })
+    }),
+    cargarTablaPos('clientes').then(res => {
+      if (res.success) asignar(() => { clientes.value = res.data || [] })
+    }),
+    cargarTablaPos('marcas').then(res => {
+      if (res.success) asignar(() => { marcas.value = res.data || [] })
+    }),
+    cargarTablaPos('categorias').then(res => {
+      if (res.success) asignar(() => { categorias.value = res.data || [] })
+    }),
+  ]
+
+  await Promise.allSettled(tareas)
+  if (cargaId !== cargaProductosId) return
+  const marcasMap = new Map(marcas.value.map(m => [m.id, m.nombre]))
+  const catsMap = new Map(categorias.value.map(c => [c.id, c.nombre]))
+  accesorios.value = accesorios.value.map(a => ({
+    ...a,
+    marca_nombre: marcasMap.get(a.marca) || '',
+    categoria_nombre: catsMap.get(a.categoria) || '',
+  }))
 }
 
+let cargaInventarioId = 0
 async function cargarImeisDisponibles() {
-  try {
-    const [resImei, resSerial] = await Promise.all([
-      window.db.getAll('imei'),
-      window.db.getAll('serial'),
-    ])
-    if (resImei.success) {
-      imeisDisponibles.value = filterByAlmacen(resImei.data || []).filter((i: any) => i.estado === 'DISPONIBLE')
-    }
-    if (resSerial.success) {
-      serialesDisponibles.value = filterByAlmacen(resSerial.data || []).filter((i: any) => i.estado === 'DISPONIBLE')
-    }
-  } catch (error) {
-    console.error(error)
-  }
+  const cargaId = ++cargaInventarioId
+  await Promise.allSettled([
+    cargarTablaPos('imei').then(res => {
+      if (res.success && cargaId === cargaInventarioId) {
+        imeisDisponibles.value = filterByAlmacen(res.data || []).filter((item: any) => String(item.estado || '').trim().toUpperCase() === 'DISPONIBLE')
+      }
+    }),
+    cargarTablaPos('serial').then(res => {
+      if (res.success && cargaId === cargaInventarioId) {
+        serialesDisponibles.value = filterByAlmacen(res.data || []).filter((item: any) => String(item.estado || '').trim().toUpperCase() === 'DISPONIBLE')
+      }
+    }),
+  ])
 }
-
 function abrirVariantes(telefono: any) {
   selectedTelefono.value = telefono
   selectedElectrodomestico.value = null
@@ -5660,6 +5680,13 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
                 </div>
 
                 <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+                  <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('amber')" @click="nuevoApartadoRef?.abrir()">
+                    <span class="w-14 h-14 rounded-2xl bg-orange-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-bookmark text-2xl"></i></span>
+                    <span class="flex flex-col gap-0.5">
+                      <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Apartado</span>
+                      <span class="text-[11px] leading-tight text-surface-500 dark:text-surface-400">Reservar un producto</span>
+                    </span>
+                  </button>
                   <button type="button" class="pos-action-card group aspect-square rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4 flex flex-col items-center justify-center text-center gap-3 shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer" :style="actionCardStyle('amber')" @click="abrirFatCoti">
                     <span class="w-14 h-14 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-file-edit text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
@@ -8335,6 +8362,8 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
         <Button label="Cancelar" severity="secondary" text @click="dialogEtiquetaTallerPos = false" />
       </template>
     </Dialog>
+
+    <NuevoApartadoDialog ref="nuevoApartadoRef" @created="cargarProductos(); cargarImeisDisponibles()" />
 
     <RecibirEquipoDialog
       :visible="dialogRecibirEquipo"
