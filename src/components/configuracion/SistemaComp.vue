@@ -129,6 +129,17 @@ function seleccionarColorPrimario(color: string) {
   aparienciaPendiente.value = true
 }
 
+function seleccionarTemaVisual(style: 'standard' | 'glass') {
+  theme.setVisualStyle(style)
+  aparienciaPendiente.value = true
+  toast.add({
+    severity: 'success',
+    summary: style === 'glass' ? 'Tema Glass aplicado' : 'Tema clásico aplicado',
+    detail: style === 'glass' ? 'La interfaz ahora usa el acabado translúcido inspirado en macOS.' : 'La interfaz volvió al acabado original.',
+    life: 2600,
+  })
+}
+
 function seleccionarTonoPrimario(tono: string) {
   shadeSeleccionada.value = tono
   theme.setColorShade(tono)
@@ -456,6 +467,47 @@ onMounted(async () => {
               Apariencia
             </h3>
 
+            <div class="space-y-2.5">
+              <div>
+                <p class="text-sm font-medium">Tema visual</p>
+                <p class="text-xs text-surface-400">Elige un acabado preconfigurado para toda la interfaz.</p>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  class="theme-preset-card"
+                  :class="{ 'theme-preset-card--active': theme.visualStyle === 'standard' }"
+                  @click="seleccionarTemaVisual('standard')"
+                >
+                  <span class="theme-preview theme-preview--standard">
+                    <span></span><span></span><span></span>
+                  </span>
+                  <span class="theme-preset-copy">
+                    <strong>Clásico</strong>
+                    <small>Limpio y sólido</small>
+                  </span>
+                  <i v-if="theme.visualStyle === 'standard'" class="pi pi-check-circle"></i>
+                </button>
+                <button
+                  type="button"
+                  class="theme-preset-card theme-preset-card--glass"
+                  :class="{ 'theme-preset-card--active': theme.visualStyle === 'glass' }"
+                  @click="seleccionarTemaVisual('glass')"
+                >
+                  <span class="theme-preview theme-preview--glass">
+                    <span></span><span></span><span></span>
+                  </span>
+                  <span class="theme-preset-copy">
+                    <strong>Glass</strong>
+                    <small>Inspirado en macOS</small>
+                  </span>
+                  <i v-if="theme.visualStyle === 'glass'" class="pi pi-check-circle"></i>
+                </button>
+              </div>
+            </div>
+
+            <div class="h-px bg-surface-200 dark:bg-surface-700"></div>
+
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm font-medium">Modo Oscuro</p>
@@ -680,7 +732,7 @@ onMounted(async () => {
               </div>
               <div>
                 <span class="text-surface-400 text-xs">Tema Actual</span>
-                <p class="font-medium capitalize">{{ theme.isDark ? 'Oscuro' : 'Claro' }}</p>
+                <p class="font-medium capitalize">{{ theme.visualStyle === 'glass' ? 'Glass' : (theme.isDark ? 'Oscuro' : 'Claro') }}</p>
               </div>
             </div>
           </div>

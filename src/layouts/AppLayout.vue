@@ -5,6 +5,7 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import AppTopbar from '@/components/AppTopbar.vue'
 import JarvisAssistant from '@/components/assistant/JarvisAssistant.vue'
+import GlobalSearchPalette from '@/components/GlobalSearchPalette.vue'
 import { version } from '../../package.json'
 import { useConexion } from '@/composables/useConexion'
 
@@ -116,7 +117,7 @@ onBeforeUnmount(() => {
   </div>
   <div v-else class="app-shell flex flex-col h-screen overflow-hidden text-surface-900 dark:text-surface-0">
     <AppTopbar />
-    <main class="app-main flex-1 overflow-auto">
+    <main class="app-main flex-1 min-h-0 min-w-0 overflow-auto">
       <div class="app-main-inner">
         <router-view :key="`${route.fullPath}:${contentRefreshKey}`" />
       </div>
@@ -141,6 +142,7 @@ onBeforeUnmount(() => {
       </div>
     </footer>
     <JarvisAssistant />
+    <GlobalSearchPalette />
   </div>
 </template>
 
@@ -157,14 +159,35 @@ onBeforeUnmount(() => {
     linear-gradient(180deg, #020617 0%, #0f172a 100%);
 }
 
+.glass .app-shell {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(125, 211, 252, 0.68), transparent 30rem),
+    radial-gradient(circle at 88% 18%, rgba(196, 181, 253, 0.6), transparent 34rem),
+    radial-gradient(circle at 56% 96%, rgba(251, 207, 232, 0.5), transparent 38rem),
+    linear-gradient(145deg, #eaf5ff 0%, #eef2ff 46%, #fdf2f8 100%);
+}
+
+.glass.dark .app-shell {
+  background:
+    radial-gradient(circle at 12% 5%, rgba(14, 165, 233, 0.28), transparent 32rem),
+    radial-gradient(circle at 88% 14%, rgba(124, 58, 237, 0.25), transparent 36rem),
+    radial-gradient(circle at 55% 100%, rgba(219, 39, 119, 0.14), transparent 40rem),
+    linear-gradient(145deg, #06101f 0%, #111827 52%, #170e25 100%);
+}
+
 .app-main {
   padding: 1.25rem;
+  min-height: 0;
+  min-width: 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .app-main-inner {
   width: 100%;
   max-width: 1680px;
-  height: 100%;
+  min-height: 100%;
+  min-width: 0;
   margin: 0 auto;
 }
 
@@ -177,6 +200,18 @@ onBeforeUnmount(() => {
 .dark .app-footer {
   border-top-color: rgba(51, 65, 85, 0.8);
   background: rgba(2, 6, 23, 0.76);
+}
+
+.glass .app-footer {
+  border-top-color: rgba(255, 255, 255, 0.58);
+  background: rgba(255, 255, 255, 0.42);
+  -webkit-backdrop-filter: saturate(160%) blur(26px);
+  backdrop-filter: saturate(160%) blur(26px);
+}
+
+.glass.dark .app-footer {
+  border-top-color: rgba(255, 255, 255, 0.1);
+  background: rgba(2, 6, 23, 0.4);
 }
 
 @media (min-width: 1024px) {

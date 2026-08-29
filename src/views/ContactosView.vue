@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shallowRef, computed } from 'vue'
+import { shallowRef, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
@@ -31,10 +31,10 @@ function onSelect(key: string) {
   active.value = key
 }
 
-const tabRuta = String(route.query.tab || '')
-active.value = items.value.some(item => item.key === tabRuta)
-  ? tabRuta
-  : (items.value[0]?.key || '')
+watch(() => route.query.tab, tab => {
+  const key = String(tab || '')
+  active.value = items.value.some(item => item.key === key) ? key : (items.value[0]?.key || '')
+}, { immediate: true })
 </script>
 
 <template>

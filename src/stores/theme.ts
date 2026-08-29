@@ -7,6 +7,7 @@ import {
 
 export const useThemeStore = defineStore('theme', () => {
   const isDark = ref(localStorage.getItem('theme') === 'dark')
+  const visualStyle = ref<'standard' | 'glass'>(localStorage.getItem('visualStyle') === 'glass' ? 'glass' : 'standard')
   const primaryColor = ref(localStorage.getItem('primaryColor') || 'blue')
   const colorShade = ref(localStorage.getItem('colorShade') || '500')
   const topbarBg = ref(localStorage.getItem('topbarBg') || 'white')
@@ -53,6 +54,14 @@ export const useThemeStore = defineStore('theme', () => {
     } else {
       document.documentElement.classList.remove('dark')
     }
+    document.documentElement.classList.toggle('glass', visualStyle.value === 'glass')
+  }
+
+  function setVisualStyle(style: 'standard' | 'glass') {
+    visualStyle.value = style
+    localStorage.setItem('visualStyle', style)
+    applyTheme()
+    applyTopbarAppearance()
   }
 
   function setPrimaryColor(color: string) {
@@ -143,12 +152,14 @@ export const useThemeStore = defineStore('theme', () => {
     fondo_barra: string
     tono_barra: string
     color_texto_barra: string
+    tema_visual: 'standard' | 'glass'
   }) {
     setPrimaryColor(appearance.color_primario || 'blue')
     setColorShade(appearance.tono_primario || '500')
     setTopbarBg(appearance.fondo_barra || 'white')
     setTopbarShade(appearance.tono_barra || '500')
     setTopbarTextColor(appearance.color_texto_barra || 'auto')
+    setVisualStyle(appearance.tema_visual === 'glass' ? 'glass' : 'standard')
   }
 
   async function loadWarehouseAppearance(almacenId: number, almacenUid: string, refreshCloud = true) {
@@ -165,6 +176,7 @@ export const useThemeStore = defineStore('theme', () => {
       fondo_barra: topbarBg.value,
       tono_barra: topbarShade.value,
       color_texto_barra: topbarTextColor.value,
+      tema_visual: visualStyle.value,
     })
     return null
   }
@@ -178,6 +190,7 @@ export const useThemeStore = defineStore('theme', () => {
         fondo_barra: topbarBg.value,
         tono_barra: topbarShade.value,
         color_texto_barra: topbarTextColor.value,
+        tema_visual: visualStyle.value,
       },
     )
   }
@@ -193,9 +206,9 @@ export const useThemeStore = defineStore('theme', () => {
   applyTopbarAppearance()
 
   return {
-    isDark, primaryColor, colorShade, topbarBg, topbarShade, topbarTextColor, colorPalettes,
+    isDark, visualStyle, primaryColor, colorShade, topbarBg, topbarShade, topbarTextColor, colorPalettes,
     toggleTheme, setPrimaryColor, setColorShade, applyPrimaryColor, setTopbarBg, setTopbarShade,
-    setTopbarTextColor, applyTopbarAppearance, resolveTopbarBackground,
+    setVisualStyle, setTopbarTextColor, applyTopbarAppearance, resolveTopbarBackground,
     applyWarehouseAppearance, loadWarehouseAppearance, saveWarehouseAppearance,
   }
 })

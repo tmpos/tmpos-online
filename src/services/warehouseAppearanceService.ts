@@ -11,6 +11,7 @@ export interface WarehouseAppearance {
   fondo_barra: string
   tono_barra: string
   color_texto_barra: string
+  tema_visual: 'standard' | 'glass'
   almacen_id: number
   almacen_uid: string
 }
@@ -38,6 +39,7 @@ function normalizeAppearance(row: any, warehouse: WarehouseReference): Warehouse
     fondo_barra: String(row?.fondo_barra || 'white'),
     tono_barra: String(row?.tono_barra || '500'),
     color_texto_barra: String(row?.color_texto_barra || 'auto'),
+    tema_visual: row?.tema_visual === 'glass' ? 'glass' : 'standard',
     almacen_id: Number(row?.almacen_id || warehouse.id || 0),
     almacen_uid: String(row?.almacen_uid || warehouse.uid || ''),
   }
@@ -92,7 +94,7 @@ export async function loadWarehouseAppearance(
 
 export async function saveWarehouseAppearance(
   warehouse: WarehouseReference,
-  appearance: Pick<WarehouseAppearance, 'color_primario' | 'tono_primario' | 'fondo_barra' | 'tono_barra' | 'color_texto_barra'>,
+  appearance: Pick<WarehouseAppearance, 'color_primario' | 'tono_primario' | 'fondo_barra' | 'tono_barra' | 'color_texto_barra' | 'tema_visual'>,
 ): Promise<{ success: boolean; synced: boolean; error?: string }> {
   try {
     const rows = await localRows()

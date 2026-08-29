@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { shallowRef, computed, onMounted } from 'vue'
+import { shallowRef, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
@@ -43,14 +43,10 @@ const components: Record<string, any> = {
 
 const active = shallowRef('')
 
-onMounted(() => {
-  const tab = route.query.tab as string
-  if (tab && items.value.some(i => i.key === tab)) {
-    active.value = tab
-  } else {
-    active.value = items.value.length > 0 ? items.value[0].key : ''
-  }
-})
+watch(() => route.query.tab, tab => {
+  const key = String(tab || '')
+  active.value = items.value.some(item => item.key === key) ? key : (items.value[0]?.key || '')
+}, { immediate: true })
 
 function onSelect(key: string) {
   active.value = key

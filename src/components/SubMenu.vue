@@ -46,6 +46,7 @@ const emit = defineEmits<{
   backdrop-filter: blur(14px);
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
 }
 
 @media (max-width: 900px) {
