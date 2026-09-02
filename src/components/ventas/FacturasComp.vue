@@ -2,7 +2,7 @@
 import { getLocaleProfile, getSystemLocale } from '@/i18n/localeProfiles'
 import { ref, computed, onMounted, watch } from 'vue'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import DataTable from 'primevue/datatable'
@@ -30,6 +30,7 @@ import { envioElectron } from '@/funciones/funciones.js'
 
 const toast = useToast()
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter()
 const facturas = ref<any[]>([])
@@ -61,6 +62,14 @@ const rangoActivo = ref<string>('todo')
 const rangoPersonalizado = ref<Date[]>([])
 const comprobanteFiltro = ref('')
 const reenviandoAlanube = ref(false)
+
+watch(() => route.query.factura, (numero) => {
+  const facturaSolicitada = String(numero || '').trim()
+  if (!facturaSolicitada) return
+  rangoActivo.value = 'todo'
+  comprobanteFiltro.value = ''
+  busqueda.value = facturaSolicitada
+}, { immediate: true })
 
 const actionMenu = ref()
 const facturaAccion = ref<any>(null)
@@ -105,6 +114,21 @@ function totalProductoFactura(producto: any): number {
   return Number(producto?.total ?? (cantidadProductoFactura(producto) * precioProductoFactura(producto))) || 0
 }
 
+function valoresDetalleProductoFactura(valorPlural: any, valorSingular: any): string[] {
+  const valores = Array.isArray(valorPlural) ? valorPlural : (valorSingular ? [valorSingular] : [])
+  return [...new Set(valores.map(valor => String(valor || '').trim()).filter(Boolean))]
+}
+
+function detalleVariantesProductoFactura(producto: any): string {
+  const capacidades = valoresDetalleProductoFactura(producto?.capacidades, producto?.capacidad)
+    .map(valor => /^\d+(?:\.\d+)?$/.test(valor) ? `${valor} GB` : valor)
+  const colores = valoresDetalleProductoFactura(producto?.colores, producto?.color)
+  return [
+    capacidades.length ? `Capacidad: ${capacidades.join(', ')}` : '',
+    colores.length ? `Color: ${colores.join(', ')}` : '',
+  ].filter(Boolean).join(' · ')
+}
+
 const productosFacturaFiltrados = computed(() => {
   const texto = busquedaProductosFactura.value.trim().toLowerCase()
   const productos = productosFactura(facturaProductosVisible.value)
@@ -117,6 +141,10 @@ const productosFacturaFiltrados = computed(() => {
     producto?.codigo_barra,
     producto?.imei,
     producto?.serial,
+    producto?.capacidad,
+    producto?.capacidades,
+    producto?.color,
+    producto?.colores,
   ].some(valor => String(valor || '').toLowerCase().includes(texto)))
 })
 
@@ -1309,7 +1337,7 @@ onMounted(async () => {
           <p class="text-xs text-surface-500 text-center">
             Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.
           </p>
-          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly mask />
         </div>
         <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
       </div>
@@ -1363,6 +1391,7 @@ onMounted(async () => {
               <tr v-for="(producto, index) in productosFacturaFiltrados" :key="producto.uid || producto.id || producto.imei || producto.serial || index" class="border-t border-surface-200 dark:border-surface-700">
                 <td class="px-3 py-3">
                   <p class="font-medium text-surface-900 dark:text-surface-0">{{ nombreProductoFactura(producto) }}</p>
+                  <p v-if="detalleVariantesProductoFactura(producto)" class="text-xs font-medium text-primary-600 dark:text-primary-400 mt-0.5">{{ detalleVariantesProductoFactura(producto) }}</p>
                   <p v-if="producto.imei || producto.serial" class="text-xs text-surface-500 mt-0.5">{{ producto.imei ? `IMEI: ${producto.imei}` : `Serial: ${producto.serial}` }}</p>
                 </td>
                 <td class="px-3 py-3 text-center">{{ cantidadProductoFactura(producto) }}</td>

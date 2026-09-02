@@ -46,12 +46,9 @@ export function useCaja() {
   async function verificarTurno() {
     try {
       const res = await (window as any).electron.invoke('caja:getTurnoActivo', almacenStore.activeUid || '')
-      if (res.success && res.data) {
-        turnoActivo.value = res.data
-        hayTurnoAbierto.value = true
-      } else {
-        turnoActivo.value = null
-        hayTurnoAbierto.value = false
+      if (res.success) {
+        turnoActivo.value = res.data || null
+        hayTurnoAbierto.value = Boolean(res.data)
       }
     } catch {
       turnoActivo.value = null

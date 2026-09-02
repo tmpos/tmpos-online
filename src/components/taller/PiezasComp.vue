@@ -423,7 +423,7 @@ useCloudRefresh(['piezas', 'proveedores', 'movimientos_piezas'], cargarPiezas)
         <Column header="Imagen" style="width: 4rem">
           <template #body="{ data }">
             <div v-if="imagenUrl(data.imagen)" class="w-8 h-8 rounded overflow-hidden">
-              <img :src="imagenUrl(data.imagen)" class="w-full h-full object-cover" alt="" />
+              <img :src="imagenUrl(data.imagen)" loading="lazy" decoding="async" class="w-full h-full object-cover" alt="" />
             </div>
           </template>
         </Column>
@@ -462,7 +462,7 @@ useCloudRefresh(['piezas', 'proveedores', 'movimientos_piezas'], cargarPiezas)
             @click="abrirEditar(pieza)"
           >
             <div v-if="imagenUrl(pieza.imagen)" class="-mx-4 -mt-4 h-36 overflow-hidden rounded-t-xl">
-              <img :src="imagenUrl(pieza.imagen)" class="w-full h-full object-cover" :alt="`Imagen de ${pieza.nombre}`" />
+              <img :src="imagenUrl(pieza.imagen)" loading="lazy" decoding="async" class="w-full h-full object-cover" :alt="`Imagen de ${pieza.nombre}`" />
             </div>
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">

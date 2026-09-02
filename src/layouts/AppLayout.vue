@@ -157,6 +157,33 @@ onBeforeUnmount(() => {
     linear-gradient(180deg, #020617 0%, #0f172a 100%);
 }
 
+/* Visual Style: Glass. .app-shell paints over the whole viewport, so the
+   colorful background that makes the glass effect visible has to live
+   here (not on <body>, which it fully covers). */
+.theme-glass .app-shell {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(99, 102, 241, 0.28), transparent 42%),
+    radial-gradient(circle at 88% 18%, rgba(236, 72, 153, 0.22), transparent 42%),
+    radial-gradient(circle at 50% 95%, rgba(16, 185, 129, 0.2), transparent 48%),
+    linear-gradient(160deg, #eef2ff 0%, #f8fafc 55%, #e0f2fe 100%);
+}
+
+.theme-glass.dark .app-shell {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(99, 102, 241, 0.32), transparent 42%),
+    radial-gradient(circle at 88% 18%, rgba(236, 72, 153, 0.2), transparent 42%),
+    radial-gradient(circle at 50% 95%, rgba(16, 185, 129, 0.18), transparent 48%),
+    linear-gradient(160deg, #020617 0%, #0f172a 55%, #020617 100%);
+}
+
+.theme-glass .app-footer {
+  background: rgba(255, 255, 255, 0.35) !important;
+}
+
+.theme-glass.dark .app-footer {
+  background: rgba(15, 23, 42, 0.35) !important;
+}
+
 .app-main {
   padding: 1.25rem;
 }

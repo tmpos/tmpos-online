@@ -444,6 +444,8 @@ function createTables() {
     hora TEXT DEFAULT '',
     comentario TEXT DEFAULT '',
     metodo_pago TEXT DEFAULT 'EFECTIVO',
+    efectivo REAL DEFAULT 0,
+    transferencia REAL DEFAULT 0,
     banco_id INTEGER DEFAULT 0,
     banco_uid TEXT DEFAULT '',
     banco_nombre TEXT DEFAULT '',
@@ -782,7 +784,7 @@ function auditSchema() {
     ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", fecha_pago_tecnico: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     piezas: { reservada: 'INTEGER DEFAULT 0' },
     tecnicos: { tipo_comision: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision: 'REAL DEFAULT 0' },
-    gastos: { metodo_pago: "TEXT DEFAULT 'EFECTIVO'", banco_id: 'INTEGER DEFAULT 0', banco_uid: "TEXT DEFAULT ''", banco_nombre: "TEXT DEFAULT ''" },
+    gastos: { metodo_pago: "TEXT DEFAULT 'EFECTIVO'", efectivo: 'REAL DEFAULT 0', transferencia: 'REAL DEFAULT 0', banco_id: 'INTEGER DEFAULT 0', banco_uid: "TEXT DEFAULT ''", banco_nombre: "TEXT DEFAULT ''" },
     caja_turnos: { monto_final: 'REAL DEFAULT 0', efectivo_esperado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0' },
     cuadres: { efectivo_esperado: 'REAL DEFAULT 0', efectivo_contado: 'REAL DEFAULT 0', diferencia: 'REAL DEFAULT 0', cierre_ciego: 'INTEGER DEFAULT 0', abonos_cxc: 'REAL DEFAULT 0', cantidad_abonos_cxc: 'INTEGER DEFAULT 0' },
     serial: { equipo_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''" },
@@ -1084,7 +1086,11 @@ export function dbUpdate(tabla: string, id: number, data: Record<string, any>): 
       delete data.almacen_id
       delete data.almacen_uid
     }
-    if (tabla === 'empresa') data.almacen_uid = data.uid || (oldData as any).uid || (oldData as any).almacen_uid || ''
+    if (tabla === 'empresa') {
+      // Conserva para siempre el identificador con el que la empresa fue creada.
+      data.uid = (oldData as any).uid || data.uid || generarUid()
+      data.almacen_uid = data.uid
+    }
     if (tabla === 'serial' && (data.equipo_uid !== undefined || data.id_equi !== undefined)) {
       const equipoStmt = d.prepare(data.equipo_uid
         ? `SELECT id, uid, nombre FROM electrodomesticos WHERE uid = ? LIMIT 1`

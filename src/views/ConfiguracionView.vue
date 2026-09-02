@@ -1,30 +1,31 @@
 <script setup lang="ts">
-import { shallowRef, computed, watch } from 'vue'
+import { shallowRef, computed, watch, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
-import EmpresaComp from '@/components/configuracion/EmpresaComp.vue'
-import SistemaComp from '@/components/configuracion/SistemaComp.vue'
-import CorreoComp from '@/components/configuracion/CorreoComp.vue'
-import NotificacionesComp from '@/components/configuracion/NotificacionesComp.vue'
-import BackupsComp from '@/components/configuracion/BackupsComp.vue'
-import ImpresorasComp from '@/components/configuracion/ImpresorasComp.vue'
-import SoporteComp from '@/components/configuracion/SoporteComp.vue'
-import BitacoraComp from '@/components/configuracion/BitacoraComp.vue'
-import VentasConfigComp from '@/components/configuracion/VentasConfigComp.vue'
-import LicenciaComp from '@/components/configuracion/LicenciaComp.vue'
-import PermisosComp from '@/components/configuracion/PermisosComp.vue'
-import TMCloudComp from '@/components/configuracion/TMCloudComp.vue'
-import ActualizacionComp from '@/components/configuracion/ActualizacionComp.vue'
-import MetodosPagoComp from '@/components/configuracion/MetodosPagoComp.vue'
-import AlanubeComp from '@/components/configuracion/AlanubeComp.vue'
-import ComprobantesElectronicosComp from '@/components/configuracion/ComprobantesElectronicosComp.vue'
-import OtpLocalComp from '@/components/configuracion/OtpLocalComp.vue'
-import ModoTiendaComp from '@/components/configuracion/ModoTiendaComp.vue'
-import OpenAIComp from '@/components/configuracion/OpenAIComp.vue'
-import HomeConfigComp from '@/components/configuracion/HomeConfigComp.vue'
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
+
+const EmpresaComp = defineAsyncComponent(() => import('@/components/configuracion/EmpresaComp.vue'))
+const SistemaComp = defineAsyncComponent(() => import('@/components/configuracion/SistemaComp.vue'))
+const CorreoComp = defineAsyncComponent(() => import('@/components/configuracion/CorreoComp.vue'))
+const NotificacionesComp = defineAsyncComponent(() => import('@/components/configuracion/NotificacionesComp.vue'))
+const BackupsComp = defineAsyncComponent(() => import('@/components/configuracion/BackupsComp.vue'))
+const ImpresorasComp = defineAsyncComponent(() => import('@/components/configuracion/ImpresorasComp.vue'))
+const SoporteComp = defineAsyncComponent(() => import('@/components/configuracion/SoporteComp.vue'))
+const BitacoraComp = defineAsyncComponent(() => import('@/components/configuracion/BitacoraComp.vue'))
+const VentasConfigComp = defineAsyncComponent(() => import('@/components/configuracion/VentasConfigComp.vue'))
+const LicenciaComp = defineAsyncComponent(() => import('@/components/configuracion/LicenciaComp.vue'))
+const PermisosComp = defineAsyncComponent(() => import('@/components/configuracion/PermisosComp.vue'))
+const TMCloudComp = defineAsyncComponent(() => import('@/components/configuracion/TMCloudComp.vue'))
+const ActualizacionComp = defineAsyncComponent(() => import('@/components/configuracion/ActualizacionComp.vue'))
+const MetodosPagoComp = defineAsyncComponent(() => import('@/components/configuracion/MetodosPagoComp.vue'))
+const AlanubeComp = defineAsyncComponent(() => import('@/components/configuracion/AlanubeComp.vue'))
+const ComprobantesElectronicosComp = defineAsyncComponent(() => import('@/components/configuracion/ComprobantesElectronicosComp.vue'))
+const OtpLocalComp = defineAsyncComponent(() => import('@/components/configuracion/OtpLocalComp.vue'))
+const ModoTiendaComp = defineAsyncComponent(() => import('@/components/configuracion/ModoTiendaComp.vue'))
+const OpenAIComp = defineAsyncComponent(() => import('@/components/configuracion/OpenAIComp.vue'))
+const HomeConfigComp = defineAsyncComponent(() => import('@/components/configuracion/HomeConfigComp.vue'))
 
 const auth = useAuthStore()
 const route = useRoute()

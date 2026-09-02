@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { shallowRef, computed } from 'vue'
+import { shallowRef, computed, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
-import Reporte606Comp from '@/components/reportes/Reporte606Comp.vue'
-import Reporte607Comp from '@/components/reportes/Reporte607Comp.vue'
-import GastosComp from '@/components/reportes/GastosComp.vue'
-import VentasReporteComp from '@/components/reportes/VentasReporteComp.vue'
-import GananciasComp from '@/components/reportes/GananciasComp.vue'
-import ReporteGeneralComp from '@/components/reportes/ReporteGeneralComp.vue'
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
+
+const Reporte606Comp = defineAsyncComponent(() => import('@/components/reportes/Reporte606Comp.vue'))
+const Reporte607Comp = defineAsyncComponent(() => import('@/components/reportes/Reporte607Comp.vue'))
+const GastosComp = defineAsyncComponent(() => import('@/components/reportes/GastosComp.vue'))
+const VentasReporteComp = defineAsyncComponent(() => import('@/components/reportes/VentasReporteComp.vue'))
+const GananciasComp = defineAsyncComponent(() => import('@/components/reportes/GananciasComp.vue'))
+const ReporteGeneralComp = defineAsyncComponent(() => import('@/components/reportes/ReporteGeneralComp.vue'))
 
 const auth = useAuthStore()
 const route = useRoute()

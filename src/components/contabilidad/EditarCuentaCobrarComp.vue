@@ -136,6 +136,24 @@ function formatMoney(value: any): string {
   return new Intl.NumberFormat(locale.value, { style: 'currency', currency: currency.value }).format(Number(value || 0))
 }
 
+function valoresUnicos(valorPlural: any, valorSingular: any): string[] {
+  const valores = Array.isArray(valorPlural) && valorPlural.length ? valorPlural : (valorSingular ? [valorSingular] : [])
+  return [...new Set(valores.map((v: any) => String(v || '').trim()).filter(Boolean))]
+}
+
+function detalleVarianteProducto(prod: any): string {
+  const imeis = valoresUnicos(prod?.imeis, prod?.imei)
+  const seriales = valoresUnicos(prod?.seriales, prod?.serial)
+  const capacidades = valoresUnicos(prod?.capacidades, prod?.capacidad)
+  const colores = valoresUnicos(prod?.colores, prod?.color)
+  return [
+    imeis.length ? `IMEI: ${imeis.join(', ')}` : '',
+    seriales.length ? `Serial: ${seriales.join(', ')}` : '',
+    capacidades.length ? `Capacidad: ${capacidades.join(', ')}` : '',
+    colores.length ? `Color: ${colores.join(', ')}` : '',
+  ].filter(Boolean).join(' · ')
+}
+
 function estadoSeverity(estado: string): 'success' | 'danger' | 'warn' | 'info' {
   if (estado === 'PAGADA') return 'success'
   if (estado === 'VENCIDA') return 'danger'
@@ -419,7 +437,7 @@ function buildPdfHtml(logoEmpresa = ''): string {
   const rowsProductos = productos.value.map((item: any, index: number) => {
     const cantidad = Number(item.cantidad || 1)
     const precio = Number(item.precio ?? item.precio_venta ?? 0)
-    const identificador = item.imei ? `IMEI: ${escapeHtml(item.imei)}` : item.serial ? `Serial: ${escapeHtml(item.serial)}` : ''
+    const identificador = escapeHtml(detalleVarianteProducto(item))
     return `<tr><td>${index + 1}</td><td><strong>${escapeHtml(item.nombre || item.descripcion || 'Producto')}</strong><small>${identificador}</small></td><td class="right">${cantidad}</td><td class="right">${formatMoney(precio)}</td><td class="right">${formatMoney(cantidad * precio)}</td></tr>`
   }).join('') || '<tr><td colspan="5" class="empty">Sin productos registrados</td></tr>'
   const rowsPagos = pagos.value.map((p: any, index: number) =>
@@ -504,7 +522,7 @@ onMounted(cargar)
       <div v-else class="rounded-xl border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 p-4 text-emerald-700">Esta cuenta ya está saldada.</div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <section class="rounded-2xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden"><div class="p-4 border-b border-surface-200 dark:border-surface-700"><h3 class="font-bold">Productos facturados</h3></div><DataTable :value="productos" size="small" scrollable responsiveLayout="scroll"><Column field="nombre" header="Producto"><template #body="{ data }"><div><p class="font-medium">{{ data.nombre || data.descripcion || 'Producto' }}</p><p v-if="data.imei || data.serial" class="text-xs text-surface-500 font-mono">{{ data.imei ? `IMEI: ${data.imei}` : `Serial: ${data.serial}` }}</p></div></template></Column><Column field="cantidad" header="Cant." /><Column header="Precio"><template #body="{ data }">{{ formatMoney(data.precio ?? data.precio_venta) }}</template></Column><template #empty><div class="text-center py-6 text-surface-500">Sin productos registrados.</div></template></DataTable></section>
+        <section class="rounded-2xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden"><div class="p-4 border-b border-surface-200 dark:border-surface-700"><h3 class="font-bold">Productos facturados</h3></div><DataTable :value="productos" size="small" scrollable responsiveLayout="scroll"><Column field="nombre" header="Producto"><template #body="{ data }"><div><p class="font-medium">{{ data.nombre || data.descripcion || 'Producto' }}</p><p v-if="detalleVarianteProducto(data)" class="text-xs text-surface-500 font-mono">{{ detalleVarianteProducto(data) }}</p></div></template></Column><Column field="cantidad" header="Cant." /><Column header="Precio"><template #body="{ data }">{{ formatMoney(data.precio ?? data.precio_venta) }}</template></Column><template #empty><div class="text-center py-6 text-surface-500">Sin productos registrados.</div></template></DataTable></section>
         <section class="rounded-2xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 overflow-hidden"><div class="p-4 border-b border-surface-200 dark:border-surface-700"><h3 class="font-bold">Historial de abonos</h3></div><DataTable :value="pagos" size="small" scrollable responsiveLayout="scroll"><Column header="#"><template #body="{ index }">{{ index + 1 }}</template></Column><Column field="fecha" header="Fecha"><template #body="{ data }">{{ data.fecha }} {{ data.hora || '' }}</template></Column><Column field="metodo" header="Método"><template #body="{ data }"><div>{{ data.metodo || data.metodo_pago || 'ABONO' }}</div><div v-if="data.banco_nombre" class="text-xs text-surface-500">{{ data.banco_nombre }}<span v-if="data.banco_numero_cuenta"> · {{ data.banco_numero_cuenta }}</span></div></template></Column><Column header="Monto"><template #body="{ data }"><span class="font-bold text-emerald-600">{{ formatMoney(montoPago(data)) }}</span></template></Column><Column header="Acciones" style="width: 7rem"><template #body="{ data, index }"><div class="flex gap-1"><Button icon="pi pi-pencil" severity="info" text rounded size="small" @click="abrirEditarAbono(data, index)" v-tooltip="'Editar abono'" /><Button icon="pi pi-trash" severity="danger" text rounded size="small" @click="confirmarEliminarAbono(index)" v-tooltip="'Eliminar abono'" /></div></template></Column><template #empty><div class="text-center py-6 text-surface-500">Sin abonos registrados.</div></template></DataTable></section>
       </div>
 

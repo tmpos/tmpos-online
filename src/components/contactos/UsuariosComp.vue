@@ -667,7 +667,7 @@ onMounted(async () => {
         </div>
         <div v-if="deleteOtpEnviado" class="space-y-2">
           <p class="text-xs text-surface-500">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
-          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly mask />
         </div>
         <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>
       </div>

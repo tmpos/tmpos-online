@@ -1,22 +1,24 @@
 <script setup lang="ts">
-import { shallowRef, computed } from 'vue'
+import { shallowRef, computed, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
-import ComprarComp from '@/components/contabilidad/ComprarComp.vue'
-import CuadreComp from '@/components/contabilidad/CuadreComp.vue'
-import CajaComp from '@/components/contabilidad/CajaComp.vue'
-import CuentasPorCobrarComp from '@/components/contabilidad/CuentasPorCobrarComp.vue'
-import CuentasPorPagarComp from '@/components/contabilidad/CuentasPorPagarComp.vue'
-import BancosComp from '@/components/contabilidad/BancosComp.vue'
-import GastosComp from '@/components/contabilidad/GastosComp.vue'
-import GastosFijosComp from '@/components/contabilidad/GastosFijosComp.vue'
-import UtilidadesComp from '@/components/contabilidad/UtilidadesComp.vue'
-import CatalogoCuentasComp from '@/components/contabilidad/CatalogoCuentasComp.vue'
-import BalanceGeneralComp from '@/components/contabilidad/BalanceGeneralComp.vue'
-import ComprobantesComp from '@/components/contabilidad/ComprobantesComp.vue'
-import ComisionesComp from '@/components/contabilidad/ComisionesComp.vue'
+
+const ComprarComp = defineAsyncComponent(() => import('@/components/contabilidad/ComprarComp.vue'))
+const CuadreComp = defineAsyncComponent(() => import('@/components/contabilidad/CuadreComp.vue'))
+const CajaComp = defineAsyncComponent(() => import('@/components/contabilidad/CajaComp.vue'))
+const CuentasPorCobrarComp = defineAsyncComponent(() => import('@/components/contabilidad/CuentasPorCobrarComp.vue'))
+const CuentasPorPagarComp = defineAsyncComponent(() => import('@/components/contabilidad/CuentasPorPagarComp.vue'))
+const BancosComp = defineAsyncComponent(() => import('@/components/contabilidad/BancosComp.vue'))
+const GastosComp = defineAsyncComponent(() => import('@/components/contabilidad/GastosComp.vue'))
+const GastosFijosComp = defineAsyncComponent(() => import('@/components/contabilidad/GastosFijosComp.vue'))
+const UtilidadesComp = defineAsyncComponent(() => import('@/components/contabilidad/UtilidadesComp.vue'))
+const CatalogoCuentasComp = defineAsyncComponent(() => import('@/components/contabilidad/CatalogoCuentasComp.vue'))
+const BalanceGeneralComp = defineAsyncComponent(() => import('@/components/contabilidad/BalanceGeneralComp.vue'))
+const ComprobantesComp = defineAsyncComponent(() => import('@/components/contabilidad/ComprobantesComp.vue'))
+const ComisionesComp = defineAsyncComponent(() => import('@/components/contabilidad/ComisionesComp.vue'))
+const NotasCreditoElectronicasComp = defineAsyncComponent(() => import('@/components/contabilidad/NotasCreditoElectronicasComp.vue'))
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -35,6 +37,7 @@ const allItems: SubMenuItem[] = [
   { label: 'Balance General', icon: 'pi pi-chart-bar', key: 'balance' },
   { label: 'Comprobantes', icon: 'pi pi-file-check', key: 'comprobantes' },
   { label: 'Comisiones', icon: 'pi pi-percentage', key: 'comisiones' },
+  { label: 'Notas Crédito e-CF', icon: 'pi pi-receipt', key: 'notas-credito-ecf' },
 ]
 
 const items = computed(() => allItems.filter(item => auth.tienePermiso(item.key)))
@@ -53,6 +56,7 @@ const components: Record<string, any> = {
   balance: BalanceGeneralComp,
   comprobantes: ComprobantesComp,
   comisiones: ComisionesComp,
+  'notas-credito-ecf': NotasCreditoElectronicasComp,
 }
 
 const active = shallowRef('')

@@ -240,11 +240,13 @@ export async function handleElectronInvoke(channel: string, ...args: any[]): Pro
       const res = await (window as any).db.getAll('caja_turnos')
       const almacenUid = String(args[0] || localStorage.getItem('almacen_uid') || localStorage.getItem('almacen_default_uid') || '')
       const almacenId = Number(localStorage.getItem('almacen_id') || localStorage.getItem('almacen_default_id') || 0)
+      const empresasRes = await (window as any).db.getAll('empresa')
+      const unicaEmpresa = (empresasRes.success ? empresasRes.data || [] : []).length <= 1
       const turno = (res.data || []).find((item: any) => {
         if (String(item.estado || '').toLowerCase() !== 'abierto') return false
         if (almacenUid && item.almacen_uid) return String(item.almacen_uid) === almacenUid
         if (almacenId && Number(item.almacen_id)) return Number(item.almacen_id) === almacenId
-        return false
+        return unicaEmpresa && !item.almacen_uid && !Number(item.almacen_id)
       }) || null
       return { success: true, data: turno }
     }

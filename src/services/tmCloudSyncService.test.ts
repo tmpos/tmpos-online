@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findPhoneForImei, isConfirmedCloudDelete, sortTablesByDependency } from './tmCloudSyncService'
+import { findPhoneForImei, isConfirmedCloudDelete, shouldSkipOnlineOnlyRowPush, sortTablesByDependency } from './tmCloudSyncService'
 
 describe('orden de descarga inicial de TM Cloud', () => {
   it('descarga las tablas esenciales y sus padres antes que las historicas', () => {
@@ -44,5 +44,12 @@ describe('orden de descarga inicial de TM Cloud', () => {
     expect(isConfirmedCloudDelete({ tabla: 'usuarios', uid: 'usr-1' })).toBe(false)
     expect(isConfirmedCloudDelete({ tabla: 'usuarios', uid: 'usr-1', confirmado: 0 })).toBe(false)
     expect(isConfirmedCloudDelete({ tabla: 'usuarios', uid: 'usr-1', confirmado: 1 })).toBe(true)
+  })
+
+  it('envia usuarios locales a la API incluso en modo solo-online', () => {
+    expect(shouldSkipOnlineOnlyRowPush('usuarios', true)).toBe(false)
+    expect(shouldSkipOnlineOnlyRowPush('empresa', true)).toBe(false)
+    expect(shouldSkipOnlineOnlyRowPush('clientes', true)).toBe(true)
+    expect(shouldSkipOnlineOnlyRowPush('usuarios', false)).toBe(false)
   })
 })

@@ -288,12 +288,26 @@
         </div>
         <div>
           <label class="text-xs font-semibold mb-1.5 block">Metodo de pago</label>
-          <select v-model="gastoForm.metodo_pago" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500" @change="gastoForm.banco_id = null">
+          <select v-model="gastoForm.metodo_pago" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500" @change="cambiarMetodoGasto">
             <option value="EFECTIVO">Efectivo</option>
             <option value="TRANSFERENCIA">Transferencia</option>
+            <option value="MIXTO">Mixto (efectivo + transferencia)</option>
           </select>
         </div>
-        <div v-if="gastoForm.metodo_pago === 'TRANSFERENCIA'">
+        <div v-if="gastoForm.metodo_pago === 'MIXTO'" class="grid grid-cols-2 gap-3 rounded-xl border border-orange-200 dark:border-orange-900/60 bg-orange-50/70 dark:bg-orange-950/20 p-3">
+          <div>
+            <label class="text-xs font-semibold mb-1.5 block">Parte en efectivo <span class="text-red-500">*</span></label>
+            <input v-model.number="gastoForm.efectivo" type="number" step="0.01" min="0" :max="gastoForm.monto" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm font-bold outline-none focus:ring-2 focus:ring-primary-500" placeholder="0.00" @input="ajustarMixtoDesdeEfectivo(Number($event.target.value))" />
+          </div>
+          <div>
+            <label class="text-xs font-semibold mb-1.5 block">Parte transferida <span class="text-red-500">*</span></label>
+            <input v-model.number="gastoForm.transferencia" type="number" step="0.01" min="0" :max="gastoForm.monto" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm font-bold outline-none focus:ring-2 focus:ring-primary-500" placeholder="0.00" @input="ajustarMixtoDesdeTransferencia(Number($event.target.value))" />
+          </div>
+          <p class="col-span-2 text-xs" :class="distribucionGastoValida ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'">
+            Efectivo {{ formatMoney(gastoForm.efectivo || 0) }} + transferencia {{ formatMoney(gastoForm.transferencia || 0) }} = {{ formatMoney(Number(gastoForm.efectivo || 0) + Number(gastoForm.transferencia || 0)) }}
+          </p>
+        </div>
+        <div v-if="gastoForm.metodo_pago === 'TRANSFERENCIA' || gastoForm.metodo_pago === 'MIXTO'">
           <label class="text-xs font-semibold mb-1.5 block">Banco de origen <span class="text-red-500">*</span></label>
           <select v-model="gastoForm.banco_id" :disabled="cargandoBancosGasto" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700 text-sm outline-none focus:ring-2 focus:ring-primary-500">
             <option :value="null">{{ cargandoBancosGasto ? 'Cargando bancos...' : 'Seleccionar banco' }}</option>
@@ -305,7 +319,7 @@
       <template #footer>
         <div class="flex gap-2 justify-end">
           <button @click="showGastoModal = false" class="px-4 py-2 rounded-lg text-sm font-medium border border-surface-300 dark:border-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700">Cancelar</button>
-          <button @click="guardarGasto" :disabled="procesandoGasto || !gastoForm.descripcion || !gastoForm.monto || (gastoForm.metodo_pago === 'TRANSFERENCIA' && !gastoForm.banco_id)" class="px-5 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50"><i v-if="procesandoGasto" class="pi pi-spin pi-spinner"></i><i v-else class="pi pi-check"></i>Guardar Gasto</button>
+          <button @click="guardarGasto" :disabled="procesandoGasto || gastoInvalido" class="px-5 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50"><i v-if="procesandoGasto" class="pi pi-spin pi-spinner"></i><i v-else class="pi pi-check"></i>Guardar Gasto</button>
         </div>
       </template>
     </Dialog>
@@ -471,7 +485,7 @@
         <p class="text-xs text-surface-500">Esta accion requiere el codigo OTP de 4 digitos.</p>
         <div v-if="eliminarPendienteOtpEnviado" class="flex flex-col items-center gap-3 rounded-xl border border-surface-200 dark:border-surface-700 p-3">
           <p class="text-xs text-surface-500 text-center">Consulta el codigo en el Centro OTP: {{ eliminarPendienteOtpUrl || 'Configuracion > OTP Local' }}.</p>
-          <InputOtp v-model="eliminarPendienteOtp" :length="4" integerOnly />
+          <InputOtp v-model="eliminarPendienteOtp" :length="4" integerOnly mask />
         </div>
         <p v-if="eliminarPendienteError" class="text-sm text-red-500 text-center">{{ eliminarPendienteError }}</p>
       </div>
@@ -499,6 +513,7 @@ import FacturaPdfPrint from '@/components/ventas/FacturaPdfPrint.vue'
 import TicketGastoPrint from '@/components/contabilidad/TicketGastoPrint.vue'
 import { reintegrarInventarioFactura } from '@/composables/useDevoluciones'
 import { guardarGastoOnline } from '@/services/gastosOnlineService'
+import { isCollectablePendingInvoice } from '@/domain/pendingInvoiceRules'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -581,11 +596,44 @@ const descripcionMovimiento = ref('')
 const procesandoMovimiento = ref(false)
 
 const showGastoModal = ref(false)
-const gastoForm = ref({ categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null })
+const gastoForm = ref({ categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null, efectivo: 0, transferencia: 0 })
 const procesandoGasto = ref(false)
 const categoriasGasto = ['Alimentos', 'Servicios', 'Suministros', 'Nomina', 'Mantenimiento', 'Transporte', 'Gasto de taller', 'Otros']
 const bancosGasto = ref([])
 const cargandoBancosGasto = ref(false)
+
+const distribucionGastoValida = computed(() => {
+  if (gastoForm.value.metodo_pago !== 'MIXTO') return true
+  const monto = Number(gastoForm.value.monto || 0)
+  const efectivo = Number(gastoForm.value.efectivo || 0)
+  const transferencia = Number(gastoForm.value.transferencia || 0)
+  return efectivo > 0 && transferencia > 0 && Math.abs((efectivo + transferencia) - monto) < 0.01
+})
+
+const gastoInvalido = computed(() => {
+  const metodo = gastoForm.value.metodo_pago
+  return !gastoForm.value.descripcion.trim()
+    || !(Number(gastoForm.value.monto) > 0)
+    || ((metodo === 'TRANSFERENCIA' || metodo === 'MIXTO') && !gastoForm.value.banco_id)
+    || !distribucionGastoValida.value
+})
+
+function cambiarMetodoGasto() {
+  const monto = Number(gastoForm.value.monto || 0)
+  gastoForm.value.banco_id = null
+  gastoForm.value.efectivo = gastoForm.value.metodo_pago === 'EFECTIVO' ? monto : 0
+  gastoForm.value.transferencia = gastoForm.value.metodo_pago === 'TRANSFERENCIA' ? monto : 0
+}
+
+function ajustarMixtoDesdeEfectivo(valor = Number(gastoForm.value.efectivo || 0)) {
+  if (gastoForm.value.metodo_pago !== 'MIXTO') return
+  gastoForm.value.transferencia = Math.max(0, Number((Number(gastoForm.value.monto || 0) - valor).toFixed(2)))
+}
+
+function ajustarMixtoDesdeTransferencia(valor = Number(gastoForm.value.transferencia || 0)) {
+  if (gastoForm.value.metodo_pago !== 'MIXTO') return
+  gastoForm.value.efectivo = Math.max(0, Number((Number(gastoForm.value.monto || 0) - valor).toFixed(2)))
+}
 
 const showDetalleVenta = ref(false)
 const ventaSeleccionada = ref(null)
@@ -654,12 +702,14 @@ function perteneceAlmacenActual(registro) {
   const idRegistro = Number(registro?.almacen_id || 0)
   if (uidActivo && uidRegistro) return uidRegistro === uidActivo
   if (idActivo && idRegistro) return idRegistro === idActivo
-  return false
+  // Registros antiguos pueden no tener almacen asignado. En una instalacion
+  // de una sola empresa pertenecen al unico almacen y no deben desaparecer.
+  return !uidRegistro && !idRegistro && almacenStore.almacenes.length <= 1
 }
 
 function actualizarFacturasPendientes(facturas) {
   const pendientes = (facturas || [])
-    .filter(factura => String(factura.estado_factura || '').toUpperCase() === 'PENDIENTE' && perteneceAlmacenActual(factura))
+    .filter(factura => isCollectablePendingInvoice(factura) && perteneceAlmacenActual(factura))
     .sort((a, b) => parseDbDate(b.created_at) - parseDbDate(a.created_at))
   const idsActuales = new Set(pendientes.map(factura => String(factura.id)))
   if (pendientesInicializados && pendientes.some(factura => !idsPendientesConocidos.has(String(factura.id)))) {
@@ -684,7 +734,7 @@ async function revisarNuevasFacturas() {
 }
 
 function abrirEliminarFacturaPendiente(factura) {
-  if (!factura || String(factura.estado_factura || '').toUpperCase() !== 'PENDIENTE' || !perteneceAlmacenActual(factura)) return
+  if (!factura || !isCollectablePendingInvoice(factura) || !perteneceAlmacenActual(factura)) return
   facturaPendienteEliminar.value = factura
   eliminarPendienteOtpEnviado.value = false
   eliminarPendienteOtp.value = ''
@@ -704,7 +754,7 @@ async function solicitarOtpEliminarPendiente() {
   try {
     const actual = await window.db.getById('facturas', factura.id)
     if (!actual.success || !actual.data) throw new Error('La factura ya no existe')
-    if (String(actual.data.estado_factura || '').toUpperCase() !== 'PENDIENTE') throw new Error('La factura ya no esta pendiente')
+    if (!isCollectablePendingInvoice(actual.data)) throw new Error('El documento no es una factura de venta pendiente cobrable')
     if (!perteneceAlmacenActual(actual.data)) throw new Error('La factura pertenece a otro almacen')
     facturaPendienteEliminar.value = actual.data
 
@@ -739,7 +789,7 @@ async function eliminarFacturaPendiente() {
   try {
     const actual = await window.db.getById('facturas', factura.id)
     if (!actual.success || !actual.data) throw new Error('La factura ya no existe')
-    if (String(actual.data.estado_factura || '').toUpperCase() !== 'PENDIENTE') throw new Error('Solo se pueden eliminar facturas pendientes desde Caja')
+    if (!isCollectablePendingInvoice(actual.data)) throw new Error('Solo se pueden eliminar facturas de venta pendientes desde Caja')
     if (!perteneceAlmacenActual(actual.data)) throw new Error('La factura pertenece a otro almacen')
 
     const otp = await window.electron.invoke('facturas:confirmarOtpEliminar', {
@@ -810,6 +860,9 @@ function formatTime(d) {
 }
 
 async function ensureTables() {
+  // En modo online las tablas ya se administran mediante el esquema de la API.
+  // Ejecutar SQL remoto en cada refresco solo agrega carga y posibles carreras.
+  if (window.__onlineOnly) return
   const sql = `
     CREATE TABLE IF NOT EXISTS caja_turnos (
       id INTEGER PRIMARY KEY AUTOINCREMENT, monto_inicial REAL DEFAULT 0, entradas REAL DEFAULT 0,
@@ -835,8 +888,12 @@ async function cargarDatos() {
   try {
     await ensureTables()
     const res = await window.db.getAll('caja_turnos')
-    if (res.success && res.data?.length) {
-      const abierto = res.data.find(r => r.estado === 'abierto' && perteneceAlmacenActual(r))
+    if (!res.success || !Array.isArray(res.data)) {
+      console.error('No se pudo consultar el turno directamente en TM Cloud:', res.error || 'Respuesta invalida')
+      return
+    }
+    if (res.data.length) {
+      const abierto = res.data.find(r => String(r.estado || '').toLowerCase() === 'abierto' && perteneceAlmacenActual(r))
       if (abierto) {
         turnoActual.value = abierto
         await cargarVentas()
@@ -878,7 +935,7 @@ async function cargarVentas() {
 }
 
 async function cobrarFacturaPendiente(factura) {
-  if (!factura?.id) return
+  if (!factura?.id || !isCollectablePendingInvoice(factura)) return
   facturaPendienteCobro.value = factura
   metodoCobroPendiente.value = 'EFECTIVO'
   cobroMixto.value = { efectivo: 0, transferencia: 0, tarjeta: 0 }
@@ -899,7 +956,7 @@ function seleccionarMetodoCobroPendiente(metodo) {
 
 async function confirmarCobroPendiente() {
   const factura = facturaPendienteCobro.value
-  if (!factura?.id || !turnoActual.value?.id) return
+  if (!factura?.id || !turnoActual.value?.id || !isCollectablePendingInvoice(factura)) return
   const totalFactura = Number(factura.total || 0)
   let efectivo = 0, transferencia = 0, tarjeta = 0
   if (metodoCobroPendiente.value === 'MIXTO') {
@@ -985,9 +1042,12 @@ async function cargarGastos() {
     )
     gastosLista.value = gastos
     gastosTurno.value = gastos.reduce((s, g) => s + Number(g.cantidad || g.monto || 0), 0)
-    gastosEfectivoTurno.value = gastos
-      .filter(g => String(g.metodo_pago || 'EFECTIVO').toUpperCase() !== 'TRANSFERENCIA')
-      .reduce((s, g) => s + Number(g.cantidad || g.monto || 0), 0)
+    gastosEfectivoTurno.value = gastos.reduce((total, gasto) => {
+      const metodo = String(gasto.metodo_pago || 'EFECTIVO').toUpperCase()
+      if (metodo === 'TRANSFERENCIA') return total
+      if (metodo === 'MIXTO') return total + Number(gasto.efectivo || 0)
+      return total + Number(gasto.cantidad || gasto.monto || 0)
+    }, 0)
   } catch (e) {
     console.error('Error cargando gastos:', e)
   }
@@ -1078,14 +1138,13 @@ async function cargarBancosGasto() {
 }
 
 async function agregarGasto() {
-  gastoForm.value = { categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null }
+  gastoForm.value = { categoria: '', descripcion: '', monto: 0, metodo_pago: 'EFECTIVO', banco_id: null, efectivo: 0, transferencia: 0 }
   showGastoModal.value = true
   await cargarBancosGasto()
 }
 
 async function guardarGasto() {
-  if (procesandoGasto.value || !gastoForm.value.descripcion.trim() || !gastoForm.value.monto) return
-  if (gastoForm.value.metodo_pago === 'TRANSFERENCIA' && !gastoForm.value.banco_id) return
+  if (procesandoGasto.value || gastoInvalido.value) return
   procesandoGasto.value = true
   try {
     const ahora = new Date()
@@ -1096,6 +1155,8 @@ async function guardarGasto() {
       cantidad: Number(gastoForm.value.monto),
       comentario,
       metodo_pago: gastoForm.value.metodo_pago,
+      efectivo: gastoForm.value.metodo_pago === 'EFECTIVO' ? Number(gastoForm.value.monto) : Number(gastoForm.value.efectivo || 0),
+      transferencia: gastoForm.value.metodo_pago === 'TRANSFERENCIA' ? Number(gastoForm.value.monto) : Number(gastoForm.value.transferencia || 0),
       banco_id: banco?.id || 0,
       banco_uid: banco?.uid || '',
       turno_id: turnoActual.value.id,
@@ -1116,6 +1177,8 @@ async function guardarGasto() {
       cantidad: Number(gastoForm.value.monto),
       comentario,
       metodo_pago: gastoForm.value.metodo_pago,
+      efectivo: gastoForm.value.metodo_pago === 'EFECTIVO' ? Number(gastoForm.value.monto) : Number(gastoForm.value.efectivo || 0),
+      transferencia: gastoForm.value.metodo_pago === 'TRANSFERENCIA' ? Number(gastoForm.value.monto) : Number(gastoForm.value.transferencia || 0),
       banco_id: banco?.id || 0,
       banco_nombre: banco?.nombre || '',
       turno_id: turnoActual.value.id,

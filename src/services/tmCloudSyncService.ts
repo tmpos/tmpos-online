@@ -5,6 +5,15 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 // descargan ni se sobrescriben mediante sincronizacion o realtime.
 const LOCAL_SYSTEM_TABLES = ['configuracion', 'tmcloud_config', 'sync_deletes', 'bitacora', 'licencia', 'correo', 'otp_local_config']
 const GLOBAL_BUSINESS_TABLES = new Set(['usuarios', 'bancos', 'banco_transacciones'])
+// En modo solo-online casi todas las tablas se escriben directamente mediante
+// onlineDataService y no necesitan un segundo upsert. Estas dos, sin embargo,
+// se conservan localmente para poder iniciar sesion y recuperar la configuracion
+// esencial aunque la API no este disponible; sus cambios si deben enviarse aqui.
+const ONLINE_ONLY_SYNCED_LOCAL_TABLES = new Set(['usuarios', 'empresa'])
+
+export function shouldSkipOnlineOnlyRowPush(tabla: string, onlineOnly: boolean): boolean {
+  return onlineOnly && !ONLINE_ONLY_SYNCED_LOCAL_TABLES.has(tabla)
+}
 const VENTAS_PAUSADAS_CLOUD_COLUMNS = [
   { name: 'uid', type: 'TEXT' },
   { name: 'codigo', type: 'TEXT', required: true, indexed: true },
@@ -1157,7 +1166,7 @@ export async function pushAllTables(mode?: SyncMode): Promise<SyncResult> {
 }
 
 export async function pushLocalRowToCloud(tabla: string, id: number): Promise<{ success: boolean; error?: string }> {
-  if ((window as any).__onlineOnly) return { success: true }
+  if (shouldSkipOnlineOnlyRowPush(tabla, Boolean((window as any).__onlineOnly))) return { success: true }
   try {
     if (!await ensureCloudApi()) return { success: false, error: 'TM Cloud no conectado' }
     if (tabla === 'apariencia_almacen') {

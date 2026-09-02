@@ -25,11 +25,13 @@ import { envioElectron, encryptarPassword } from '@/funciones/funciones.js'
 import JsBarcode from 'jsbarcode'
 import QRCode from 'qrcode'
 import TicketFacturaPrint from '@/components/ventas/TicketFacturaPrint.vue'
+import FacturaPdfPrint from '@/components/ventas/FacturaPdfPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useAuthStore } from '@/stores/auth.store'
 import { getImageUrl } from '@/services/tmCloudClient'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
+import { buildSoldImeiInvoiceCostUpdate } from '@/domain/imeiInvoiceCostSync'
 import { matchesSearch } from '@/composables/useSearch'
 import ColorSelect from '@/components/shared/ColorSelect.vue'
 import CapacitySelect from '@/components/shared/CapacitySelect.vue'
@@ -44,7 +46,7 @@ const { filterByAlmacen, addAlmacenId } = useAlmacenFilter()
 const imeis = ref<any[]>([])
 const telefonos = ref<any[]>([])
 const clientes = ref<any[]>([])
-const loading = ref(false)
+const loading = ref(true)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
@@ -111,26 +113,63 @@ function abrirMenuAccionesImei(event: Event, imei: any) {
 }
 
 const ticketPrintRef = ref<any>(null)
+const facturaPdfRef = ref<any>(null)
 const reimprimiendo = ref(false)
+const abriendoFacturaPdf = ref(false)
+const abriendoRegistroFactura = ref(false)
 const sincronizandoSubir = ref(false)
 const sincronizandoBajar = ref(false)
+
+async function buscarFacturaDelImei() {
+  const res = await window.db.getAll('facturas')
+  if (!res.success) throw new Error(res.error || 'No se pudieron consultar las facturas')
+  const numero = String(form.value.no_factura || '').trim()
+  const factura = (res.data || []).find((item: any) => String(item.no_factura || '').trim() === numero)
+  if (!factura) throw new Error(`Factura ${numero} no encontrada`)
+  return factura
+}
 
 async function reimprimirFactura() {
   if (!form.value.no_factura || form.value.estado !== 'VENDIDO') return
   reimprimiendo.value = true
   try {
-    const res = await window.db.getAll('facturas')
-    const factura = (res.data || []).find((f: any) => f.no_factura === form.value.no_factura)
-    if (!factura) {
-      toast.add({ severity: 'warn', summary: 'No encontrada', detail: `Factura ${form.value.no_factura} no encontrada`, life: 3000 })
-      return
-    }
+    const factura = await buscarFacturaDelImei()
     await ticketPrintRef.value?.printTicket(factura)
     toast.add({ severity: 'success', summary: 'Reimprimiendo', detail: `Factura ${form.value.no_factura}`, life: 2000 })
   } catch (error: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'Error al reimprimir', life: 3000 })
   } finally {
     reimprimiendo.value = false
+  }
+}
+
+async function verFacturaPdf() {
+  if (!form.value.no_factura || form.value.estado !== 'VENDIDO') return
+  abriendoFacturaPdf.value = true
+  try {
+    const factura = await buscarFacturaDelImei()
+    await facturaPdfRef.value?.printFactura(factura)
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'No se pudo abrir la factura en PDF', life: 3500 })
+  } finally {
+    abriendoFacturaPdf.value = false
+  }
+}
+
+async function irARegistroFactura() {
+  if (!form.value.no_factura || form.value.estado !== 'VENDIDO') return
+  abriendoRegistroFactura.value = true
+  try {
+    const factura = await buscarFacturaDelImei()
+    dialogVisible.value = false
+    await router.push({
+      path: '/ventas',
+      query: { tab: 'facturas', factura: String(factura.no_factura || form.value.no_factura) },
+    })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error.message || 'No se pudo abrir el registro de la factura', life: 3500 })
+  } finally {
+    abriendoRegistroFactura.value = false
   }
 }
 
@@ -192,7 +231,83 @@ const form = ref({
   no_factura: '',
   nota: '',
 })
+const colorRapidoVisible = ref(false)
+const colorRapidoNombre = ref('')
+const colorRapidoCodigo = ref('#000000')
+const capacidadRapidaVisible = ref(false)
+const capacidadRapidaNombre = ref('')
 
+function abrirColorRapido() {
+  colorRapidoNombre.value = ''
+  colorRapidoCodigo.value = '#000000'
+  colorRapidoVisible.value = true
+}
+
+async function guardarColorRapido() {
+  const nombre = colorRapidoNombre.value.trim().toUpperCase()
+  const codigo = colorRapidoCodigo.value.trim().toUpperCase()
+  if (!nombre) return
+  if (!/^#[0-9A-F]{6}$/.test(codigo)) {
+    toast.add({ severity: 'warn', summary: 'Código inválido', detail: 'Selecciona un color hexadecimal válido', life: 3000 })
+    return
+  }
+
+  const existentes = await window.db.getAll('colores')
+  if (!existentes.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: existentes.error || 'No se pudieron consultar los colores', life: 4000 })
+    return
+  }
+  const repetido = (existentes.data || []).find((color: any) => String(color.nombre || '').trim().toUpperCase() === nombre)
+  if (!repetido) {
+    const result = await window.db.insert('colores', { nombre, codigo, estado: 'activo' })
+    if (!result.success) {
+      toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear el color', life: 4000 })
+      return
+    }
+  }
+
+  form.value.color = nombre
+  colorRapidoVisible.value = false
+  toast.add({
+    severity: repetido ? 'info' : 'success',
+    summary: repetido ? 'Color seleccionado' : 'Color creado',
+    detail: repetido ? `${nombre} ya estaba registrado` : `${nombre} fue creado y seleccionado`,
+    life: 2500,
+  })
+}
+
+function abrirCapacidadRapida() {
+  capacidadRapidaNombre.value = ''
+  capacidadRapidaVisible.value = true
+}
+
+async function guardarCapacidadRapida() {
+  const nombre = capacidadRapidaNombre.value.trim().toUpperCase().replace(/\s+/g, '')
+  if (!nombre) return
+
+  const existentes = await window.db.getAll('capacidades')
+  if (!existentes.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: existentes.error || 'No se pudieron consultar las capacidades', life: 4000 })
+    return
+  }
+  const repetida = (existentes.data || []).find((capacidad: any) => String(capacidad.nombre || '').trim().toUpperCase().replace(/\s+/g, '') === nombre)
+  if (!repetida) {
+    const result = await window.db.insert('capacidades', { nombre, estado: 'activo' })
+    if (!result.success) {
+      toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear la capacidad', life: 4000 })
+      return
+    }
+  }
+
+  form.value.capacidad = nombre
+  capacidadRapidaVisible.value = false
+  toast.add({
+    severity: repetida ? 'info' : 'success',
+    summary: repetida ? 'Capacidad seleccionada' : 'Capacidad creada',
+    detail: repetida ? `${nombre} ya estaba registrada` : `${nombre} fue creada y seleccionada`,
+    life: 2500,
+  })
+}
 const formDefault = () => ({
   nombre: '', id_equi: null as number | null, equipo: '', costo: 0, precio_venta: 0,
   precio_min: 0, precio_xmayor: 0, color: '', capacidad: '', bateria: '', estado: 'DISPONIBLE',
@@ -260,6 +375,14 @@ const imeisFiltrados = computed(() => {
   })
 })
 
+const IMEIS_TARJETAS_INICIALES = 60
+const limiteImeisTarjetas = ref(IMEIS_TARJETAS_INICIALES)
+const imeisTarjetasVisibles = computed(() => imeisFiltrados.value.slice(0, limiteImeisTarjetas.value))
+
+watch([busqueda, estadoFiltro, telefonoFiltro], () => {
+  limiteImeisTarjetas.value = IMEIS_TARJETAS_INICIALES
+})
+
 const clientesExpressFiltrados = computed(() => {
   const texto = busquedaClienteExpress.value.toLowerCase().trim()
   if (!texto) return clientes.value
@@ -297,22 +420,38 @@ async function crearProveedorImei() {
   }
 }
 
-async function cargarImeis() {
-  loading.value = true
+let cargaImeisId = 0
+let datosAuxiliaresImeiCargados = false
+
+async function cargarDatosAuxiliaresImei() {
+  if (datosAuxiliaresImeiCargados) return
   try {
-    await almacenStore.load()
-    const [resImei, resTel, resProv, resClientes] = await Promise.all([
-      window.db.getAll('imei'),
-      window.db.getAll('telefonos'),
+    const [resProv, resClientes] = await Promise.all([
       window.db.getAll('proveedores'),
       window.db.getAll('clientes'),
     ])
-
-    if (resTel.success) telefonos.value = resTel.data || []
     if (resProv.success) proveedores.value = resProv.data || []
     if (resClientes.success) clientes.value = resClientes.data || []
+    datosAuxiliaresImeiCargados = Boolean(resProv.success && resClientes.success)
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+async function cargarImeis() {
+  const cargaId = ++cargaImeisId
+  loading.value = true
+  try {
+    if (almacenStore.almacenes.length === 0) await almacenStore.load()
+    const imeisPromise = window.db.getAll('imei')
+    const telefonosPromise = window.db.getAll('telefonos')
+    void cargarDatosAuxiliaresImei()
+    const [resImei, resTel] = await Promise.all([imeisPromise, telefonosPromise])
+    if (cargaId !== cargaImeisId) return
+
+    if (resTel.success) telefonos.value = resTel.data || []
     if (resImei.success) {
-      const listaTelefonos = resTel.data || []
+      const listaTelefonos = resTel.success ? (resTel.data || []) : telefonos.value
       const telMap = new Map(listaTelefonos.map((t: any) => [String(t.id ?? ''), t]))
       const telUidMap = new Map(listaTelefonos.filter((t: any) => t.uid).map((t: any) => [String(t.uid), t]))
       const telefonosPorNombre = new Map<string, any[]>()
@@ -334,8 +473,6 @@ async function cargarImeis() {
       const resolverTelefono = (imei: any) => {
         const telefonoUid = String(imei.telefono_uid || '')
         const referenciaAnterior = String(imei.id_equi || '')
-        // Algunas sincronizaciones antiguas guardaron el UID del telefono en
-        // id_equi. Aceptamos ambos campos antes de intentar el ID numerico.
         const porUid = (telefonoUid && telUidMap.get(telefonoUid)) ||
           (referenciaAnterior && telUidMap.get(referenciaAnterior))
         if (porUid && mismoAlmacen(imei, porUid)) return porUid
@@ -347,7 +484,8 @@ async function cargarImeis() {
         const candidatos = telefonosPorNombre.get(nombre) || []
         return candidatos.find((telefono: any) => mismoAlmacen(imei, telefono)) || candidatos[0] || porUid || porId || null
       }
-      const almacenMap = new Map(almacenStore.almacenes.map((item: any) => [Number(item.id), item.nombre]))
+      const almacenIdMap = new Map(almacenStore.almacenes.map((item: any) => [Number(item.id), item.nombre]))
+      const almacenUidMap = new Map(almacenStore.almacenes.map((item: any) => [String(item.uid || ''), item.nombre]))
       const lista = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
         ? (resImei.data || [])
         : filterByAlmacen(resImei.data || [])
@@ -360,14 +498,14 @@ async function cargarImeis() {
           equipo: telefono?.nombre || i.equipo || '',
           telefono_nombre: telefono?.nombre || i.equipo || '',
           telefono_imagen: telefono?.imagen || '',
-          almacen_nombre: almacenStore.almacenes.find((almacen: any) => String(almacen.uid) === String(i.almacen_uid))?.nombre || almacenMap.get(Number(i.almacen_id)) || 'Sin empresa asignada',
+          almacen_nombre: almacenUidMap.get(String(i.almacen_uid || '')) || almacenIdMap.get(Number(i.almacen_id)) || 'Sin empresa asignada',
         }
       })
     }
   } catch (error) {
     console.error(error)
   } finally {
-    loading.value = false
+    if (cargaId === cargaImeisId) loading.value = false
   }
 }
 
@@ -773,6 +911,39 @@ function confirmarBorrar(imei: any) {
   deleteDialogVisible.value = true
 }
 
+async function sincronizarCostoImeiVendidoEnFactura(costoAnterior: number, costoNuevo: number): Promise<number> {
+  const facturasRes = await window.db.getAll('facturas')
+  if (!facturasRes.success) throw new Error(facturasRes.error || 'No se pudieron consultar las facturas')
+
+  const facturas = facturasRes.data || []
+  const noFactura = String(selectedImei.value?.no_factura || '').trim()
+  const asociadas = noFactura
+    ? facturas.filter((factura: any) => String(factura.no_factura || '').trim() === noFactura)
+    : facturas
+  // Algunas ventas antiguas no guardaron no_factura en el IMEI. En ese caso
+  // se busca el identificador dentro de los productos de todas las facturas.
+  const candidatas = asociadas.length > 0 ? asociadas : facturas
+  let actualizadas = 0
+
+  for (const factura of candidatas) {
+    const cambios = buildSoldImeiInvoiceCostUpdate(
+      factura,
+      { id: selectedImei.value?.id, nombre: selectedImei.value?.nombre },
+      costoAnterior,
+      costoNuevo,
+    )
+    if (!cambios) continue
+
+    const updateRes = await window.db.update('facturas', factura.id, cambios)
+    if (!updateRes.success) {
+      throw new Error(updateRes.error || `No se pudo actualizar la factura ${factura.no_factura || factura.id}`)
+    }
+    actualizadas++
+  }
+
+  return actualizadas
+}
+
 async function guardar() {
   if (!form.value.nombre.trim()) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El nombre es requerido', life: 3000 })
@@ -812,19 +983,41 @@ async function guardar() {
 
     if (isEditing.value) {
       const res = await window.db.update('imei', selectedImei.value.id, data)
-      if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'IMEI actualizado', life: 3000 })
+      if (!res.success) throw new Error(res.error || 'No se pudo actualizar el IMEI')
+
+      const costoAnterior = Number(selectedImei.value?.costo || 0)
+      const costoNuevo = Number(data.costo || 0)
+      const eraVendido = String(selectedImei.value?.estado || '').trim().toUpperCase() === 'VENDIDO'
+      const facturasActualizadas = eraVendido
+        ? await sincronizarCostoImeiVendidoEnFactura(costoAnterior, costoNuevo)
+        : 0
+
+      if (eraVendido && facturasActualizadas === 0) {
+        toast.add({
+          severity: 'warn',
+          summary: 'IMEI actualizado',
+          detail: 'El costo cambio, pero no se encontro la factura asociada a este IMEI vendido',
+          life: 5000,
+        })
+      } else {
+        toast.add({
+          severity: 'success',
+          summary: 'Exito',
+          detail: facturasActualizadas > 0
+            ? 'IMEI, costo y ganancia de la factura actualizados'
+            : 'IMEI actualizado',
+          life: 3000,
+        })
       }
     } else {
       const res = await window.db.insert('imei', addAlmacenId(data))
-      if (res.success) {
-        toast.add({ severity: 'success', summary: 'Exito', detail: 'IMEI creado', life: 3000 })
-      }
+      if (!res.success) throw new Error(res.error || 'No se pudo crear el IMEI')
+      toast.add({ severity: 'success', summary: 'Exito', detail: 'IMEI creado', life: 3000 })
     }
     dialogVisible.value = false
     await cargarImeis()
-  } catch (error) {
-    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al guardar', life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'Error al guardar', life: 4000 })
   }
 }
 
@@ -1517,31 +1710,27 @@ function getEstadoClass(estado: string) {
 }
 
 onMounted(async () => {
-  try {
-    const datosJSON = await envioElectron('datosarchivo');
-    if (datosJSON) {
-      link.value = datosJSON.VITE_LINKURL || '';
-      api.value = datosJSON.VITE_LINK_API || '';
-      token.value = datosJSON.VITE_TOKEN || '';
-      patronTelefono.value = datosJSON.VITE_PATRON_TELEFONO || '';
-      linkImpresora.value = datosJSON.VITE_IMPRESORA_LOCAL || '';
-      patroncedula.value = datosJSON.VITE_PATRON_CEDULA || '';
-      tokenCorto.value = datosJSON.VITE_TOKEN_CORTO || '';
+  const configPromise = (async () => {
+    try {
+      const datosJSON = await envioElectron('datosarchivo')
+      if (datosJSON) {
+        link.value = datosJSON.VITE_LINKURL || ''
+        api.value = datosJSON.VITE_LINK_API || ''
+        token.value = datosJSON.VITE_TOKEN || ''
+        patronTelefono.value = datosJSON.VITE_PATRON_TELEFONO || ''
+        linkImpresora.value = datosJSON.VITE_IMPRESORA_LOCAL || ''
+        patroncedula.value = datosJSON.VITE_PATRON_CEDULA || ''
+        tokenCorto.value = datosJSON.VITE_TOKEN_CORTO || ''
+      }
+    } catch (error) {
+      console.error('Error cargando configuracion:', error)
     }
-  } catch (error) {
-    console.error("Error cargando configuracion:", error);
-  }
-
-  try {
-    const resEmpresa = await window.db.getAll('empresa')
-    if (resEmpresa.success && resEmpresa.data?.length > 0 && resEmpresa.data[0].nombre) {
-      empresaNombre.value = resEmpresa.data[0].nombre
-    }
-  } catch (_) {}
+  })()
 
   await almacenStore.load()
-  await cargarTelefonos()
+  empresaNombre.value = almacenStore.activeAlmacen?.nombre || almacenStore.almacenes[0]?.nombre || empresaNombre.value
   await cargarImeis()
+  void configPromise
 })
 
 useCloudRefresh(['imei', 'telefonos'], cargarImeis)
@@ -1690,9 +1879,10 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="imeisFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay IMEI registrados.</div>
-        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+        <div v-else>
+          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
           <div
-            v-for="imei in imeisFiltrados"
+            v-for="imei in imeisTarjetasVisibles"
             :key="imei.id"
             class="rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-2.5 flex flex-col gap-1.5 transition-shadow hover:shadow-sm text-xs"
           >
@@ -1704,7 +1894,7 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
             </div>
             <div class="min-w-0">
               <div v-if="imei.telefono_imagen" class="mb-1 h-20 rounded-md overflow-hidden border border-surface-200 dark:border-surface-700 bg-surface-100 dark:bg-surface-700">
-                <img :src="getImageUrl(imei.telefono_imagen)" class="w-full h-full object-cover" :alt="imei.telefono_nombre || 'Equipo'" />
+                <img :src="getImageUrl(imei.telefono_imagen)" loading="lazy" decoding="async" class="w-full h-full object-cover" :alt="imei.telefono_nombre || 'Equipo'" />
               </div>
               <h4 class="font-bold leading-tight truncate font-mono text-[11px]">IMEI: {{ imei.nombre }}</h4>
               <p v-if="imei.telefono_nombre" class="text-primary font-medium truncate text-[10px]">{{ imei.telefono_nombre }}</p>
@@ -1752,6 +1942,16 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
                 v-tooltip="'Eliminar'"
               />
             </div>
+          </div>
+          </div>
+          <div v-if="imeisTarjetasVisibles.length < imeisFiltrados.length" class="flex justify-center pt-4">
+            <Button
+              :label="`Mostrar más (${imeisFiltrados.length - imeisTarjetasVisibles.length})`"
+              icon="pi pi-angle-down"
+              severity="secondary"
+              outlined
+              @click="limiteImeisTarjetas += IMEIS_TARJETAS_INICIALES"
+            />
           </div>
         </div>
       </div>
@@ -1897,30 +2097,38 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
           </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
-            <ColorSelect v-model="form.color" />
+            <div class="flex items-center gap-2 min-w-0">
+              <ColorSelect v-model="form.color" class="flex-1 min-w-0" />
+              <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear color" @click="abrirColorRapido" v-tooltip="'Crear color'" />
+            </div>
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
-            <CapacitySelect v-model="form.capacidad" />
+            <div class="flex items-center gap-2 min-w-0">
+              <CapacitySelect v-model="form.capacidad" class="flex-1 min-w-0" />
+              <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear capacidad" @click="abrirCapacidadRapida" v-tooltip="'Crear capacidad'" />
+            </div>
           </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Bateria</label>
             <InputText v-model="form.bateria" placeholder="Ej: 5000mAh" fluid />
           </div>
-        </div>
-
-        <div class="flex flex-col gap-1">
-          <label class="font-semibold text-sm">Estado</label>
-          <Select
-            v-model="form.estado"
-            :options="estados"
-            optionLabel="label"
-            optionValue="value"
-            fluid
-          />
+          <div class="flex flex-col gap-1">
+            <label class="font-semibold text-sm">Estado</label>
+            <Select
+              v-model="form.estado"
+              :options="estados"
+              optionLabel="label"
+              optionValue="value"
+              fluid
+            />
+          </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -1978,15 +2186,32 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
       </div>
       <template #footer>
         <div class="flex items-center justify-between w-full gap-2">
-          <Button
-            v-if="isEditing && form.estado === 'VENDIDO' && form.no_factura"
-            label="Reimprimir Factura"
-            icon="pi pi-print"
-            severity="info"
-            outlined
-            :loading="reimprimiendo"
-            @click="reimprimirFactura"
-          />
+          <div v-if="isEditing && form.estado === 'VENDIDO' && form.no_factura" class="flex items-center gap-2">
+            <Button
+              label="Reimprimir Factura"
+              icon="pi pi-print"
+              severity="info"
+              outlined
+              :loading="reimprimiendo"
+              @click="reimprimirFactura"
+            />
+            <Button
+              label="Ver PDF"
+              icon="pi pi-file-pdf"
+              severity="help"
+              outlined
+              :loading="abriendoFacturaPdf"
+              @click="verFacturaPdf"
+            />
+            <Button
+              label="Ir a factura"
+              icon="pi pi-arrow-right"
+              severity="secondary"
+              outlined
+              :loading="abriendoRegistroFactura"
+              @click="irARegistroFactura"
+            />
+          </div>
           <div class="flex items-center gap-2 ml-auto">
             <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
             <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="imeiDuplicado" @click="guardar" />
@@ -1995,6 +2220,37 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
       </template>
     </Dialog>
 
+    <Dialog v-model:visible="colorRapidoVisible" header="Nuevo color" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-3 pt-2">
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Nombre</label>
+          <InputText v-model="colorRapidoNombre" placeholder="Ejemplo: AZUL MARINO" class="uppercase" fluid @keyup.enter="guardarColorRapido" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Color visual</label>
+          <div class="flex items-center gap-3">
+            <input v-model="colorRapidoCodigo" type="color" class="w-14 h-11 rounded border border-surface-300 cursor-pointer bg-transparent p-1" />
+            <InputText v-model="colorRapidoCodigo" class="font-mono uppercase flex-1" maxlength="7" />
+            <span class="w-10 h-10 rounded-full border border-surface-300 shadow-sm" :style="{ backgroundColor: colorRapidoCodigo }"></span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="colorRapidoVisible = false" />
+        <Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!colorRapidoNombre.trim()" @click="guardarColorRapido" />
+      </template>
+    </Dialog>
+    <Dialog v-model:visible="capacidadRapidaVisible" header="Nueva capacidad" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-2 pt-2">
+        <label class="font-semibold text-sm">Capacidad</label>
+        <InputText v-model="capacidadRapidaNombre" placeholder="Ejemplo: 128GB, 1TB, 220L" class="uppercase" fluid @keyup.enter="guardarCapacidadRapida" />
+        <small class="text-surface-500">Se guardará en mayúsculas y sin espacios.</small>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="capacidadRapidaVisible = false" />
+        <Button label="Crear y seleccionar" icon="pi pi-check" :disabled="!capacidadRapidaNombre.trim()" @click="guardarCapacidadRapida" />
+      </template>
+    </Dialog>
     <Dialog v-model:visible="dialogConsultarImei" header="Consultar IMEI" modal :style="{ width: '28rem' }">
       <div class="flex flex-col gap-4 py-2">
         <div class="flex items-center gap-2">
@@ -2081,7 +2337,7 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
         </div>
         <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
       <p class="text-xs text-surface-500 text-center">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
-          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly mask />
         </div>
         <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
       </div>
@@ -2323,6 +2579,7 @@ useCloudRefresh(['imei', 'telefonos'], cargarImeis)
     />
 
     <TicketFacturaPrint ref="ticketPrintRef" />
+    <FacturaPdfPrint ref="facturaPdfRef" />
 
     <Dialog v-model:visible="dialogNuevoProveedor" header="Nuevo Proveedor" modal :style="{ width: '26rem' }">
       <div class="flex flex-col gap-3 pt-2">

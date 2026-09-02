@@ -1840,7 +1840,7 @@ defineExpose({ cargarOrdenes })
           <p class="text-sm text-surface-600 dark:text-surface-300">
           Consulta el codigo en el Centro OTP: <strong>{{ deleteOtpEmail || 'Configuracion > OTP Local' }}</strong>.
           </p>
-          <InputOtp v-model="deleteOtp" integerOnly :length="4" class="justify-center" />
+          <InputOtp v-model="deleteOtp" integerOnly mask :length="4" class="justify-center" />
         </div>
 
         <p v-if="deleteOtpError" class="text-sm text-red-500">{{ deleteOtpError }}</p>

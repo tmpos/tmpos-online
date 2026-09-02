@@ -7,6 +7,7 @@ import {
 
 export const useThemeStore = defineStore('theme', () => {
   const isDark = ref(localStorage.getItem('theme') === 'dark')
+  const visualStyle = ref(localStorage.getItem('visualStyle') || 'default')
   const primaryColor = ref(localStorage.getItem('primaryColor') || 'blue')
   const colorShade = ref(localStorage.getItem('colorShade') || '500')
   const topbarBg = ref(localStorage.getItem('topbarBg') || 'white')
@@ -70,6 +71,16 @@ export const useThemeStore = defineStore('theme', () => {
 
   function toggleTheme() {
     isDark.value = !isDark.value
+  }
+
+  function applyVisualStyle() {
+    document.documentElement.classList.toggle('theme-glass', visualStyle.value === 'glass')
+  }
+
+  function setVisualStyle(style: string) {
+    visualStyle.value = style === 'glass' ? 'glass' : 'default'
+    localStorage.setItem('visualStyle', visualStyle.value)
+    applyVisualStyle()
   }
 
   function setTopbarBg(color: string) {
@@ -191,10 +202,11 @@ export const useThemeStore = defineStore('theme', () => {
 
   applyPrimaryColor(primaryColor.value)
   applyTopbarAppearance()
+  applyVisualStyle()
 
   return {
-    isDark, primaryColor, colorShade, topbarBg, topbarShade, topbarTextColor, colorPalettes,
-    toggleTheme, setPrimaryColor, setColorShade, applyPrimaryColor, setTopbarBg, setTopbarShade,
+    isDark, visualStyle, primaryColor, colorShade, topbarBg, topbarShade, topbarTextColor, colorPalettes,
+    toggleTheme, setVisualStyle, setPrimaryColor, setColorShade, applyPrimaryColor, setTopbarBg, setTopbarShade,
     setTopbarTextColor, applyTopbarAppearance, resolveTopbarBackground,
     applyWarehouseAppearance, loadWarehouseAppearance, saveWarehouseAppearance,
   }

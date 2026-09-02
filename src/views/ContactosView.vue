@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { shallowRef, computed } from 'vue'
+import { shallowRef, computed, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
-import ClientesComp from '@/components/contactos/ClientesComp.vue'
-import UsuariosComp from '@/components/contactos/UsuariosComp.vue'
-import ProveedoresComp from '@/components/contactos/ProveedoresComp.vue'
+
+const ClientesComp = defineAsyncComponent(() => import('@/components/contactos/ClientesComp.vue'))
+const UsuariosComp = defineAsyncComponent(() => import('@/components/contactos/UsuariosComp.vue'))
+const ProveedoresComp = defineAsyncComponent(() => import('@/components/contactos/ProveedoresComp.vue'))
 
 const auth = useAuthStore()
 const route = useRoute()

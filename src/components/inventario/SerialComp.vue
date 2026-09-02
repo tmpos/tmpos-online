@@ -44,7 +44,7 @@ const verTodosAlmacenes = ref(false)
 const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const dialogAjustarPrecios = ref(false)
 const guardandoAjustePrecios = ref(false)
-const loading = ref(false)
+const loading = ref(true)
 const viewMode = ref<'table' | 'cards'>('table')
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
@@ -285,6 +285,54 @@ const form = ref({
   nota: '',
 })
 
+const colorRapidoVisible = ref(false)
+const colorRapidoNombre = ref('')
+const colorRapidoCodigo = ref('#000000')
+
+function abrirColorRapido() {
+  colorRapidoNombre.value = ''
+  colorRapidoCodigo.value = '#000000'
+  colorRapidoVisible.value = true
+}
+
+async function guardarColorRapido() {
+  const nombre = colorRapidoNombre.value.trim().toUpperCase()
+  const codigo = colorRapidoCodigo.value.trim().toUpperCase()
+  if (!nombre) return
+
+  if (!/^#[0-9A-F]{6}$/.test(codigo)) {
+    toast.add({ severity: 'warn', summary: 'Codigo invalido', detail: 'Selecciona un color hexadecimal valido', life: 3000 })
+    return
+  }
+
+  const existentes = await window.db.getAll('colores')
+  if (!existentes.success) {
+    toast.add({ severity: 'error', summary: 'Error', detail: existentes.error || 'No se pudieron consultar los colores', life: 4000 })
+    return
+  }
+
+  const repetido = (existentes.data || []).find(
+    (color: any) => String(color.nombre || '').trim().toUpperCase() === nombre,
+  )
+
+  if (!repetido) {
+    const result = await window.db.insert('colores', { nombre, codigo, estado: 'activo' })
+    if (!result.success) {
+      toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear el color', life: 4000 })
+      return
+    }
+  }
+
+  form.value.color = nombre
+  colorRapidoVisible.value = false
+  toast.add({
+    severity: repetido ? 'info' : 'success',
+    summary: repetido ? 'Color seleccionado' : 'Color creado',
+    detail: repetido ? `${nombre} ya estaba registrado` : `${nombre} fue creado y seleccionado`,
+    life: 2500,
+  })
+}
+
 const serialDuplicado = ref(false)
 
 watch(() => form.value.nombre, async (val) => {
@@ -319,19 +367,13 @@ const serialesFiltrados = computed(() => {
   })
 })
 
-async function cargarElectrodomesticos() {
-  try {
-    const res = await window.db.getAll('electrodomesticos')
-    if (res.success) {
-      electrodomesticosRaw.value = res.data || []
-      electrodomesticos.value = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
-        ? electrodomesticosRaw.value
-        : filterByAlmacen(electrodomesticosRaw.value)
-    }
-  } catch (error) {
-    console.error(error)
-  }
-}
+const SERIALES_TARJETAS_INICIALES = 60
+const limiteSerialesTarjetas = ref(SERIALES_TARJETAS_INICIALES)
+const serialesTarjetasVisibles = computed(() => serialesFiltrados.value.slice(0, limiteSerialesTarjetas.value))
+
+watch([busqueda, estadoFiltro], () => {
+  limiteSerialesTarjetas.value = SERIALES_TARJETAS_INICIALES
+})
 
 async function crearProveedorSerial() {
   if (!nuevoProveedorForm.value.nombre.trim()) return
@@ -349,14 +391,34 @@ async function crearProveedorSerial() {
   }
 }
 
+let cargaSerialesId = 0
+let datosAuxiliaresSerialCargados = false
+
+async function cargarDatosAuxiliaresSerial() {
+  if (datosAuxiliaresSerialCargados) return
+  try {
+    const [resProv, resClientes] = await Promise.all([
+      window.db.getAll('proveedores'),
+      window.db.getAll('clientes'),
+    ])
+    if (resProv.success) proveedores.value = resProv.data || []
+    if (resClientes.success) clientes.value = resClientes.data || []
+    datosAuxiliaresSerialCargados = Boolean(resProv.success && resClientes.success)
+  } catch (error) {
+    console.error(error)
+  }
+}
+
 async function cargarSeriales() {
+  const cargaId = ++cargaSerialesId
   loading.value = true
   try {
-    const [resSerial, resElect, resProv] = await Promise.all([
-      window.db.getAll('serial'),
-      window.db.getAll('electrodomesticos'),
-      window.db.getAll('proveedores'),
-    ])
+    const serialPromise = window.db.getAll('serial')
+    const equiposPromise = window.db.getAll('electrodomesticos')
+    const almacenPromise = almacenStore.almacenes.length > 0 ? Promise.resolve() : almacenStore.load()
+    void cargarDatosAuxiliaresSerial()
+    const [resSerial, resElect] = await Promise.all([serialPromise, equiposPromise, almacenPromise])
+    if (cargaId !== cargaSerialesId) return
 
     if (resElect.success) {
       electrodomesticosRaw.value = resElect.data || []
@@ -364,12 +426,11 @@ async function cargarSeriales() {
         ? electrodomesticosRaw.value
         : filterByAlmacen(electrodomesticosRaw.value)
     }
-    if (resProv.success) proveedores.value = resProv.data || []
     if (resSerial.success) {
       serialesRaw.value = resSerial.data || []
       const equiposLocales = electrodomesticos.value
       const equiposPorId = new Map(equiposLocales.map((t: any) => [Number(t.id), t]))
-      const equiposPorUid = new Map(equiposLocales.map((t: any) => [String(t.uid || ''), t]))
+      const equiposPorUid = new Map(equiposLocales.filter((t: any) => t.uid).map((t: any) => [String(t.uid), t]))
       const lista = puedeVerTodosAlmacenes.value && verTodosAlmacenes.value
         ? serialesRaw.value
         : filterByAlmacen(serialesRaw.value)
@@ -382,7 +443,7 @@ async function cargarSeriales() {
   } catch (error) {
     console.error(error)
   } finally {
-    loading.value = false
+    if (cargaId === cargaSerialesId) loading.value = false
   }
 }
 
@@ -1016,35 +1077,27 @@ function getEstadoClass(estado: string) {
 }
 
 onMounted(async () => {
-  try {
-    const datosJSON = await envioElectron('datosarchivo');
-    if (datosJSON) {
-      link.value = datosJSON.VITE_LINKURL || '';
-      api.value = datosJSON.VITE_LINK_API || '';
-      token.value = datosJSON.VITE_TOKEN || '';
-      patronTelefono.value = datosJSON.VITE_PATRON_TELEFONO || '';
-      linkImpresora.value = datosJSON.VITE_IMPRESORA_LOCAL || '';
-      patroncedula.value = datosJSON.VITE_PATRON_CEDULA || '';
-      tokenCorto.value = datosJSON.VITE_TOKEN_CORTO || '';
+  const serialesPromise = cargarSeriales()
+  const configPromise = (async () => {
+    try {
+      const datosJSON = await envioElectron('datosarchivo')
+      if (datosJSON) {
+        link.value = datosJSON.VITE_LINKURL || ''
+        api.value = datosJSON.VITE_LINK_API || ''
+        token.value = datosJSON.VITE_TOKEN || ''
+        patronTelefono.value = datosJSON.VITE_PATRON_TELEFONO || ''
+        linkImpresora.value = datosJSON.VITE_IMPRESORA_LOCAL || ''
+        patroncedula.value = datosJSON.VITE_PATRON_CEDULA || ''
+        tokenCorto.value = datosJSON.VITE_TOKEN_CORTO || ''
+      }
+    } catch (error) {
+      console.error('Error cargando configuracion:', error)
     }
-  } catch (error) {
-    console.error("Error cargando configuracion:", error);
-  }
+  })()
 
-  try {
-    const resEmpresa = await window.db.getAll('empresa')
-    if (resEmpresa.success && resEmpresa.data?.length > 0 && resEmpresa.data[0].nombre) {
-      empresaNombre.value = resEmpresa.data[0].nombre
-    }
-  } catch (_) {}
-
-  try {
-    const resClientes = await window.db.getAll('clientes')
-    if (resClientes.success) clientes.value = resClientes.data || []
-  } catch (_) {}
-
-  await cargarElectrodomesticos()
-  await cargarSeriales()
+  await serialesPromise
+  empresaNombre.value = almacenStore.activeAlmacen?.nombre || almacenStore.almacenes[0]?.nombre || empresaNombre.value
+  void configPromise
 })
 
 useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
@@ -1175,9 +1228,10 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="serialesFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay Seriales registrados.</div>
-        <div v-else class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+        <div v-else>
+          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
           <div
-            v-for="serial in serialesFiltrados"
+            v-for="serial in serialesTarjetasVisibles"
             :key="serial.id"
             class="rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-2.5 flex flex-col gap-1.5 transition-shadow hover:shadow-sm text-xs"
           >
@@ -1231,6 +1285,16 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
                 v-tooltip="'Eliminar'"
               />
             </div>
+          </div>
+          </div>
+          <div v-if="serialesTarjetasVisibles.length < serialesFiltrados.length" class="flex justify-center pt-4">
+            <Button
+              :label="`Mostrar más (${serialesFiltrados.length - serialesTarjetasVisibles.length})`"
+              icon="pi pi-angle-down"
+              severity="secondary"
+              outlined
+              @click="limiteSerialesTarjetas += SERIALES_TARJETAS_INICIALES"
+            />
           </div>
         </div>
       </div>
@@ -1361,12 +1425,15 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
           </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-3">
+        <div class="grid gap-3" :class="isEditing ? 'grid-cols-3' : 'grid-cols-2'">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
-            <ColorSelect v-model="form.color" />
+            <div class="flex items-center gap-2">
+              <ColorSelect v-model="form.color" class="flex-1" />
+              <Button icon="pi pi-plus" severity="info" text rounded size="small" @click="abrirColorRapido" v-tooltip="'Nuevo color'" />
+            </div>
           </div>
-          <div class="flex flex-col gap-1">
+          <div v-if="isEditing" class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Capacidad</label>
             <CapacitySelect v-model="form.capacidad" />
           </div>
@@ -1456,6 +1523,45 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
             <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="serialDuplicado" @click="guardar" />
           </div>
         </div>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="colorRapidoVisible" header="Nuevo color" modal :style="{ width: '26rem' }">
+      <div class="flex flex-col gap-3 pt-2">
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Nombre</label>
+          <InputText
+            v-model="colorRapidoNombre"
+            placeholder="Ejemplo: AZUL MARINO"
+            class="uppercase"
+            fluid
+            @keyup.enter="guardarColorRapido"
+          />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Color visual</label>
+          <div class="flex items-center gap-3">
+            <input
+              v-model="colorRapidoCodigo"
+              type="color"
+              class="w-14 h-11 rounded border border-surface-300 cursor-pointer bg-transparent p-1"
+            />
+            <InputText v-model="colorRapidoCodigo" class="font-mono uppercase flex-1" maxlength="7" />
+            <span
+              class="w-10 h-10 rounded-full border border-surface-300 shadow-sm"
+              :style="{ backgroundColor: colorRapidoCodigo }"
+            ></span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text @click="colorRapidoVisible = false" />
+        <Button
+          label="Crear y seleccionar"
+          icon="pi pi-check"
+          :disabled="!colorRapidoNombre.trim()"
+          @click="guardarColorRapido"
+        />
       </template>
     </Dialog>
 

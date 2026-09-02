@@ -64,6 +64,7 @@ const opcionesPermisosBase = [
   { label: 'Catalogo Cuentas', key: 'catalogo', grupo: 'Contabilidad' },
   { label: 'Balance General', key: 'balance', grupo: 'Contabilidad' },
   { label: 'Comprobantes', key: 'comprobantes', grupo: 'Contabilidad' },
+  { label: 'Notas Crédito e-CF', key: 'notas-credito-ecf', grupo: 'Contabilidad' },
   { label: 'Ventas', key: 'ventas', grupo: 'Ventas' },
   { label: 'Facturas', key: 'facturas', grupo: 'Ventas' },
   { label: 'Cotizaciones', key: 'cotizaciones', grupo: 'Ventas' },

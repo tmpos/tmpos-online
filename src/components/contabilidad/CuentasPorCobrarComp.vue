@@ -30,7 +30,7 @@ const { filterByAlmacen, addAlmacenId, store: almacenStore } = useAlmacenFilter(
 const cuentas = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
-const filtroEstado = ref('')
+const filtroEstado = ref('ACTIVA')
 const verTodosAlmacenes = ref(false)
 
 const selectedCuentas = ref<any[]>([])
@@ -206,6 +206,24 @@ function formatFecha(fechaStr: string): string {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
 }
 
+function valoresUnicos(valorPlural: any, valorSingular: any): string[] {
+  const valores = Array.isArray(valorPlural) && valorPlural.length ? valorPlural : (valorSingular ? [valorSingular] : [])
+  return [...new Set(valores.map((v: any) => String(v || '').trim()).filter(Boolean))]
+}
+
+function detalleVarianteProducto(prod: any): string {
+  const imeis = valoresUnicos(prod?.imeis, prod?.imei)
+  const seriales = valoresUnicos(prod?.seriales, prod?.serial)
+  const capacidades = valoresUnicos(prod?.capacidades, prod?.capacidad)
+  const colores = valoresUnicos(prod?.colores, prod?.color)
+  return [
+    imeis.length ? `IMEI: ${imeis.join(', ')}` : '',
+    seriales.length ? `Serial: ${seriales.join(', ')}` : '',
+    capacidades.length ? `Capacidad: ${capacidades.join(', ')}` : '',
+    colores.length ? `Color: ${colores.join(', ')}` : '',
+  ].filter(Boolean).join(' · ')
+}
+
 function buildEstadoCuentaHtml(cuenta: any, empresa: any, pagos: any[], productos: any[] = [], logoResuelto = ''): string {
   const logo = logoResuelto || String(empresa?.logoprinter || empresa?.logo || '').trim()
   const ahora = new Date()
@@ -222,7 +240,7 @@ function buildEstadoCuentaHtml(cuenta: any, empresa: any, pagos: any[], producto
   const productosHtml = productos.map((p: any, i: number) => {
     const cantidad = Number(p.cantidad || 1)
     const precio = Number(p.precio ?? p.precio_venta ?? 0)
-    const identificador = p.imei ? `IMEI: ${p.imei}` : p.serial ? `Serial: ${p.serial}` : ''
+    const identificador = detalleVarianteProducto(p)
     return `<tr><td>${i + 1}</td><td><strong>${p.nombre || p.descripcion || 'Producto'}</strong>${identificador ? `<small>${identificador}</small>` : ''}</td><td class="text-right">${cantidad}</td><td class="text-right">${getSystemCurrencyCode()} ${formatCurrency(precio)}</td><td class="text-right">${getSystemCurrencyCode()} ${formatCurrency(cantidad * precio)}</td></tr>`
   }).join('') || '<tr><td colspan="5" class="empty">Sin productos registrados</td></tr>'
   const total = Number(cuenta.total || 0)
@@ -926,11 +944,14 @@ watch(metodoPago, (metodo) => {
           <div class="font-semibold mb-2">Productos (Factura #{{ cuentaSelected.no_factura }})</div>
           <div class="space-y-1 max-h-40 overflow-y-auto">
             <div v-for="(prod, i) in productosFactura" :key="i" class="flex justify-between items-center py-1 border-b border-surface-100 dark:border-surface-800 last:border-0">
-              <div>
-                <span class="font-semibold">{{ prod.nombre || prod.descripcion || prod.producto || 'Producto' }}</span>
-                <span class="text-surface-500 ml-2">x{{ prod.cantidad || prod.quantity || 1 }}</span>
+              <div class="min-w-0">
+                <div>
+                  <span class="font-semibold">{{ prod.nombre || prod.descripcion || prod.producto || 'Producto' }}</span>
+                  <span class="text-surface-500 ml-2">x{{ prod.cantidad || prod.quantity || 1 }}</span>
+                </div>
+                <div v-if="detalleVarianteProducto(prod)" class="text-xs text-surface-500 truncate">{{ detalleVarianteProducto(prod) }}</div>
               </div>
-              <span class="font-semibold">{{ $formatMoney(prod.total || ((prod.precio_venta || prod.precio_unitario || prod.precio || 0) * (prod.cantidad || prod.quantity || 1))) }}</span>
+              <span class="font-semibold shrink-0 ml-2">{{ $formatMoney(prod.total || ((prod.precio_venta || prod.precio_unitario || prod.precio || 0) * (prod.cantidad || prod.quantity || 1))) }}</span>
             </div>
           </div>
           <div v-if="facturaRelacionada" class="flex justify-between font-bold border-t border-surface-200 dark:border-surface-700 pt-2 mt-2">
@@ -1047,7 +1068,7 @@ watch(metodoPago, (metodo) => {
           <p class="text-xs text-surface-500 text-center">
             Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.
           </p>
-          <InputOtp v-model="deleteOtp" :length="4" integerOnly />
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly mask />
         </div>
         <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
       </div>

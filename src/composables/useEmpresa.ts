@@ -63,10 +63,14 @@ export function useEmpresa() {
 
     let empresaId = Number(empresa.value?.id || 0)
     if (empresaId) {
+      // El uid es identidad, no un dato editable. Las capas de persistencia
+      // tambien lo protegen, pero se elimina aqui para no intentar cambiarlo.
+      const cambios = { ...data }
+      delete cambios.uid
       // window.db agrega el usuario autenticado. La llamada directa a
       // electron.invoke no lo hacia y el proceso principal rechazaba en silencio
       // todos los cambios de empresa por falta de permisos.
-      const result = await database.update('empresa', empresaId, data)
+      const result = await database.update('empresa', empresaId, cambios)
       if (!result?.success) throw new Error(result?.error || 'No se pudo actualizar la empresa')
     } else {
       const result = await database.insert('empresa', data)

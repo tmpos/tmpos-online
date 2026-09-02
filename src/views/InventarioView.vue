@@ -1,27 +1,28 @@
 <script setup lang="ts">
-import { shallowRef, computed, watch } from 'vue'
+import { shallowRef, computed, watch, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
-import CategoriasComp from '@/components/inventario/CategoriasComp.vue'
-import MarcasComp from '@/components/inventario/MarcasComp.vue'
-import ColoresComp from '@/components/inventario/ColoresComp.vue'
-import CapacidadesComp from '@/components/inventario/CapacidadesComp.vue'
-import TelefonosComp from '@/components/inventario/TelefonosComp.vue'
-import AccesoriosComp from '@/components/inventario/AccesoriosComp.vue'
-import ElectrodomesticosComp from '@/components/inventario/ElectrodomesticosComp.vue'
-import CambiazoComp from '@/components/inventario/CambiazoComp.vue'
-import ImeiComp from '@/components/inventario/ImeiComp.vue'
-import SerialComp from '@/components/inventario/SerialComp.vue'
-import ReporteInventarioComp from '@/components/inventario/ReporteInventarioComp.vue'
-import AjustesComp from '@/components/inventario/AjustesComp.vue'
-import HistorialPreciosComp from '@/components/inventario/HistorialPreciosComp.vue'
-import EtiquetasComp from '@/components/inventario/EtiquetasComp.vue'
-import TransferenciasComp from '@/components/transferencias/TransferenciasComp.vue'
-import OrdenesCompraComp from '@/components/compras/OrdenesCompraComp.vue'
-import PerdidasComp from '@/components/inventario/PerdidasComp.vue'
 import { useSystemModeStore } from '@/stores/systemMode'
+
+const CategoriasComp = defineAsyncComponent(() => import('@/components/inventario/CategoriasComp.vue'))
+const MarcasComp = defineAsyncComponent(() => import('@/components/inventario/MarcasComp.vue'))
+const ColoresComp = defineAsyncComponent(() => import('@/components/inventario/ColoresComp.vue'))
+const CapacidadesComp = defineAsyncComponent(() => import('@/components/inventario/CapacidadesComp.vue'))
+const TelefonosComp = defineAsyncComponent(() => import('@/components/inventario/TelefonosComp.vue'))
+const AccesoriosComp = defineAsyncComponent(() => import('@/components/inventario/AccesoriosComp.vue'))
+const ElectrodomesticosComp = defineAsyncComponent(() => import('@/components/inventario/ElectrodomesticosComp.vue'))
+const CambiazoComp = defineAsyncComponent(() => import('@/components/inventario/CambiazoComp.vue'))
+const ImeiComp = defineAsyncComponent(() => import('@/components/inventario/ImeiComp.vue'))
+const SerialComp = defineAsyncComponent(() => import('@/components/inventario/SerialComp.vue'))
+const ReporteInventarioComp = defineAsyncComponent(() => import('@/components/inventario/ReporteInventarioComp.vue'))
+const AjustesComp = defineAsyncComponent(() => import('@/components/inventario/AjustesComp.vue'))
+const HistorialPreciosComp = defineAsyncComponent(() => import('@/components/inventario/HistorialPreciosComp.vue'))
+const EtiquetasComp = defineAsyncComponent(() => import('@/components/inventario/EtiquetasComp.vue'))
+const TransferenciasComp = defineAsyncComponent(() => import('@/components/transferencias/TransferenciasComp.vue'))
+const OrdenesCompraComp = defineAsyncComponent(() => import('@/components/compras/OrdenesCompraComp.vue'))
+const PerdidasComp = defineAsyncComponent(() => import('@/components/inventario/PerdidasComp.vue'))
 
 const auth = useAuthStore()
 const systemMode = useSystemModeStore()

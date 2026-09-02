@@ -188,7 +188,7 @@ async function cargarDashboard() {
 
     const almacenId = almacenStore.activeId || 0
     const almacenUid = almacenStore.activeUid || ''
-    const perteneceAlAlmacen = (item: any) => !almacenUid || (item.almacen_uid ? String(item.almacen_uid) === almacenUid : Number(item.almacen_id) === almacenId || (!item.almacen_id && almacenId === 1))
+    const perteneceAlAlmacen = (item: any) => !almacenUid || (item.almacen_uid ? String(item.almacen_uid) === almacenUid : Number(item.almacen_id) === almacenId || (!item.almacen_id && almacenStore.almacenes.length <= 1))
     const perteneceAlAlmacenPorUid = (item: any) => Boolean(almacenUid) && String(item?.almacen_uid || '') === almacenUid
     const filtrarAlmacen = (items: any[]) => items.filter(perteneceAlAlmacen)
 

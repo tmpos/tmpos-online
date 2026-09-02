@@ -933,7 +933,7 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
         <Column header="Imagen" style="width: 4rem">
           <template #body="{ data }">
             <div v-if="imagenUrl(data.imagen)" class="w-8 h-8 rounded overflow-hidden">
-              <img :src="imagenUrl(data.imagen)" class="w-full h-full object-cover" alt="" />
+              <img :src="imagenUrl(data.imagen)" loading="lazy" decoding="async" class="w-full h-full object-cover" alt="" />
             </div>
           </template>
         </Column>
@@ -1043,7 +1043,7 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
               </span>
             </div>
             <div v-if="imagenUrl(acc.imagen)" class="-mx-4 -mt-4 mb-2 h-36 overflow-hidden">
-              <img :src="imagenUrl(acc.imagen)" class="w-full h-full object-cover" alt="" />
+              <img :src="imagenUrl(acc.imagen)" loading="lazy" decoding="async" class="w-full h-full object-cover" alt="" />
             </div>
             <div>
               <h4 class="font-bold text-lg leading-tight uppercase">{{ acc.nombre }}</h4>

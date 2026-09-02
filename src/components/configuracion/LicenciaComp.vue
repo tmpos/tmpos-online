@@ -529,6 +529,7 @@ onMounted(cargarLicencia)
           v-model="verLicenciaOtp"
           :length="4"
           integerOnly
+          mask
         />
         <p v-if="verLicenciaError" class="text-red-500 text-xs text-center">{{ verLicenciaError }}</p>
       </div>

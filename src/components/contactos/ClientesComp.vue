@@ -7,12 +7,13 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
+import SelectButton from 'primevue/selectbutton'
 import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 
-import { envioElectron } from '@/funciones/funciones.js'
+import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { getImageUrl, uploadImageSource, deleteImage } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
@@ -33,6 +34,9 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const imagenPreview = ref('')
 const dialogImagenVisible = ref(false)
 const subiendoImagen = ref(false)
+const guardandoCliente = ref(false)
+const tipoDocumento = ref<'RNC' | 'CEDULA'>('RNC')
+const buscandoDocumento = ref(false)
 
 const camposArray = [
   'nombre',
@@ -134,21 +138,13 @@ async function procesarImagen(event: Event) {
   subiendoImagen.value = true
   try {
     const localImage = await imagenDesdeArchivo(file)
-    try {
-      form.value.imagen = await uploadImageSource(localImage, 'clientes', `cliente-${Date.now()}.jpg`)
-      if (isEditing.value && selectedCliente.value?.id) {
-        const actualizado = await window.db.update('clientes', selectedCliente.value.id, { imagen: form.value.imagen })
-        if (!actualizado.success) throw new Error(actualizado.error || 'No se pudo guardar la foto')
-        selectedCliente.value.imagen = form.value.imagen
-        const local = clientes.value.find((cliente: any) => cliente.id === selectedCliente.value.id)
-        if (local) local.imagen = form.value.imagen
-        if (isOnline()) await pushLocalRowToCloud('clientes', selectedCliente.value.id)
-      }
-      toast.add({ severity: 'success', summary: 'Imagen subida', detail: 'Foto guardada en TM Cloud', life: 2000 })
-    } catch (uploadError: any) {
-      form.value.imagen = localImage
-      toast.add({ severity: 'warn', summary: 'Imagen local', detail: uploadError?.message || 'No se pudo subir a TM Cloud', life: 3500 })
-    }
+    form.value.imagen = localImage
+    toast.add({
+      severity: 'info',
+      summary: 'Foto lista',
+      detail: `La foto se subira al ${isEditing.value ? 'actualizar' : 'guardar'} el cliente`,
+      life: 2500,
+    })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo cargar la imagen', life: 3000 })
   } finally {
@@ -185,6 +181,7 @@ function abrirCrear() {
   isEditing.value = false
   selectedCliente.value = null
   form.value = formDefault()
+  tipoDocumento.value = 'RNC'
   dialogVisible.value = true
 }
 
@@ -199,7 +196,53 @@ function abrirEditar(cliente: any) {
     direccion: cliente.direccion || '',
     imagen: cliente.imagen || '',
   }
+  tipoDocumento.value = form.value.rnc.replace(/\D/g, '').length === 11 ? 'CEDULA' : 'RNC'
   dialogVisible.value = true
+}
+
+async function buscarDocumentoApi() {
+  const documento = form.value.rnc.trim().replace(/\D/g, '')
+  if (!documento) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Ingresa un RNC o Cedula', life: 3000 })
+    return
+  }
+
+  form.value.rnc = documento
+  buscandoDocumento.value = true
+  try {
+    const tokenCifrado = await encryptarPassword('1234567890abc', 10)
+    const resultado: any = tipoDocumento.value === 'CEDULA'
+      ? await peticionesFetch('https://demo.tmposrd.com/api2', 'buscarcedula', { cedula: documento }, tokenCifrado, 'POST')
+      : await peticionesFetch('https://demo.tmposrd.com/api2', `consultarrnc/${documento}`, {}, tokenCifrado, 'GET')
+
+    if (resultado?.error) {
+      toast.add({ severity: 'error', summary: 'Error', detail: resultado.error, life: 4000 })
+      return
+    }
+
+    let datos = resultado?.datos || resultado?.data || resultado
+    if (Array.isArray(datos)) datos = datos[0]
+    if (!datos || typeof datos !== 'object' || Object.keys(datos).length === 0) {
+      toast.add({ severity: 'info', summary: 'No encontrado', detail: 'No se encontraron datos para ese documento', life: 3000 })
+      return
+    }
+
+    const nombre = datos.name || datos.nombre || datos.razon_social || datos.RazonSocial || ''
+    const direccion = datos.direccion || datos.Direccion || datos.address || datos.domicilio || ''
+    if (nombre) form.value.nombre = String(nombre).toUpperCase()
+    if (direccion) form.value.direccion = String(direccion).toUpperCase()
+
+    toast.add({
+      severity: 'success',
+      summary: 'Encontrado',
+      detail: form.value.nombre ? `Datos cargados: ${form.value.nombre}` : 'Documento encontrado',
+      life: 3000,
+    })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'Error al consultar API', life: 4000 })
+  } finally {
+    buscandoDocumento.value = false
+  }
 }
 
 function confirmarBorrar(cliente: any) {
@@ -208,12 +251,18 @@ function confirmarBorrar(cliente: any) {
 }
 
 async function guardar() {
+  if (subiendoImagen.value || guardandoCliente.value) return
   if (!form.value.nombre.trim()) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'El nombre es requerido', life: 3000 })
     return
   }
 
+  guardandoCliente.value = true
   try {
+    if (/^data:/i.test(form.value.imagen)) {
+      form.value.imagen = await uploadImageSource(form.value.imagen, 'clientes', `cliente-${Date.now()}.jpg`)
+    }
+
     const data = {
       nombre: form.value.nombre.trim().toUpperCase(),
       rnc: form.value.rnc.trim(),
@@ -226,6 +275,18 @@ async function guardar() {
     if (isEditing.value) {
       const res = await window.db.update('clientes', selectedCliente.value.id, data)
       if (res.success) {
+        if (isOnline()) {
+          const sincronizado = await pushLocalRowToCloud('clientes', selectedCliente.value.id)
+          if (!sincronizado.success) {
+            toast.add({ severity: 'warn', summary: 'Cliente guardado localmente', detail: sincronizado.error || 'La sincronizacion quedo pendiente', life: 4500 })
+          }
+        }
+        if ((window as any).__onlineOnly) {
+          const verificacion = await window.db.getById('clientes', selectedCliente.value.id)
+          if (!verificacion.success || String(verificacion.data?.imagen || '') !== String(data.imagen || '')) {
+            throw new Error('El servidor no confirmo la imagen del cliente')
+          }
+        }
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Cliente actualizado', life: 3000 })
       } else {
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo actualizar', life: 3000 })
@@ -234,6 +295,19 @@ async function guardar() {
     } else {
       const res = await window.db.insert('clientes', addAlmacenId(data))
       if (res.success) {
+        const clienteId = Number(res.data?.id || res.id || 0)
+        if (isOnline() && clienteId) {
+          const sincronizado = await pushLocalRowToCloud('clientes', clienteId)
+          if (!sincronizado.success) {
+            toast.add({ severity: 'warn', summary: 'Cliente guardado localmente', detail: sincronizado.error || 'La sincronizacion quedo pendiente', life: 4500 })
+          }
+        }
+        if ((window as any).__onlineOnly && clienteId) {
+          const verificacion = await window.db.getById('clientes', clienteId)
+          if (!verificacion.success || String(verificacion.data?.imagen || '') !== String(data.imagen || '')) {
+            throw new Error('El servidor no confirmo la imagen del cliente')
+          }
+        }
         toast.add({ severity: 'success', summary: 'Exito', detail: 'Cliente creado', life: 3000 })
       } else {
         toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'No se pudo crear', life: 3000 })
@@ -243,8 +317,10 @@ async function guardar() {
 
     dialogVisible.value = false
     await cargarClientes()
-  } catch (error) {
-    toast.add({ severity: 'error', summary: 'Error', detail: 'Error al guardar', life: 3000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'Error al guardar', life: 4000 })
+  } finally {
+    guardandoCliente.value = false
   }
 }
 
@@ -439,9 +515,27 @@ onMounted(async () => {
           <label class="font-semibold text-sm">Nombre</label>
           <InputText v-model="form.nombre" placeholder="Nombre del cliente" fluid class="uppercase" style="text-transform: uppercase;" />
         </div>
-        <div class="flex flex-col gap-1">
-          <label class="font-semibold text-sm">{{ fiscal.customerIdLabel }}</label>
-          <InputText v-model="form.rnc" :placeholder="fiscal.customerIdLabel" fluid />
+        <div class="flex flex-col gap-1 sm:col-span-2">
+          <label class="font-semibold text-sm">Documento</label>
+          <div class="flex flex-col sm:flex-row gap-2">
+            <SelectButton v-model="tipoDocumento" :options="['RNC', 'CEDULA']" class="shrink-0" />
+            <div class="flex flex-1 gap-2">
+              <InputText
+                v-model="form.rnc"
+                :placeholder="tipoDocumento === 'RNC' ? 'RNC' : 'Cedula'"
+                class="flex-1"
+                fluid
+                @keyup.enter="buscarDocumentoApi"
+              />
+              <Button
+                icon="pi pi-search"
+                severity="info"
+                :loading="buscandoDocumento"
+                @click="buscarDocumentoApi"
+                v-tooltip="'Buscar en API'"
+              />
+            </div>
+          </div>
         </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Email</label>
@@ -459,7 +553,13 @@ onMounted(async () => {
 
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" @click="guardar" />
+        <Button
+          :label="isEditing ? 'Actualizar' : 'Guardar'"
+          icon="pi pi-check"
+          :loading="guardandoCliente"
+          :disabled="subiendoImagen"
+          @click="guardar"
+        />
       </template>
     </Dialog>
 

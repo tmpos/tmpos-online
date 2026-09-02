@@ -135,6 +135,14 @@ function buildTicketHtml({ gasto, empresa, ticketConfig }: { gasto: any; empresa
       <span class="big rojo">${simbolo}${formatCurrency(gasto.cantidad)}</span>
     </div>
 
+    <table style="margin-top:6px;">
+      <tr><td style="padding:2px 0"><b>Metodo:</b></td><td class="precio">${gasto.metodo_pago || 'EFECTIVO'}</td></tr>
+      ${String(gasto.metodo_pago || '').toUpperCase() === 'MIXTO' ? `
+      <tr><td style="padding:2px 0">Efectivo:</td><td class="precio">${simbolo}${formatCurrency(gasto.efectivo || 0)}</td></tr>
+      <tr><td style="padding:2px 0">Transferencia:</td><td class="precio">${simbolo}${formatCurrency(gasto.transferencia || 0)}</td></tr>` : ''}
+      ${gasto.banco_nombre ? `<tr><td style="padding:2px 0"><b>Banco:</b></td><td class="precio">${gasto.banco_nombre}</td></tr>` : ''}
+    </table>
+
     ${gasto.comentario ? `<div class="bordeado" style="margin-top:6px"><p><b>Concepto:</b><br>${String(gasto.comentario).replace(/\n/g, '<br>')}</p></div>` : ''}
 
     <div class="linea"></div>

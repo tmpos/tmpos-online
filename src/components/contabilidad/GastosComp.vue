@@ -80,9 +80,33 @@ const formDefault = () => ({
   comentario: '',
   metodo_pago: 'EFECTIVO',
   banco_id: null as number | null,
+  efectivo: 0,
+  transferencia: 0,
 })
 
 const form = ref(formDefault())
+
+const distribucionMixtaValida = computed(() => {
+  if (form.value.metodo_pago !== 'MIXTO') return true
+  const efectivo = Number(form.value.efectivo || 0)
+  const transferencia = Number(form.value.transferencia || 0)
+  return efectivo > 0 && transferencia > 0 && Math.abs((efectivo + transferencia) - Number(form.value.cantidad || 0)) < 0.01
+})
+
+function cambiarMetodoPago() {
+  const monto = Number(form.value.cantidad || 0)
+  form.value.banco_id = null
+  form.value.efectivo = form.value.metodo_pago === 'EFECTIVO' ? monto : 0
+  form.value.transferencia = form.value.metodo_pago === 'TRANSFERENCIA' ? monto : 0
+}
+
+function ajustarMixtoDesdeEfectivo(valor = Number(form.value.efectivo || 0)) {
+  form.value.transferencia = Math.max(0, Number((Number(form.value.cantidad || 0) - Number(valor || 0)).toFixed(2)))
+}
+
+function ajustarMixtoDesdeTransferencia(valor = Number(form.value.transferencia || 0)) {
+  form.value.efectivo = Math.max(0, Number((Number(form.value.cantidad || 0) - Number(valor || 0)).toFixed(2)))
+}
 
 function formatHora(date: Date): string {
   if (!date) return ''
@@ -131,7 +155,10 @@ const resumenGastosFiltrados = computed(() => gastosFiltrados.value.reduce((tota
   const metodo = String(gasto.metodo_pago || 'EFECTIVO').toUpperCase()
   total.total += monto
   total.cantidad += 1
-  if (metodo.includes('TRANSFERENCIA')) total.transferencia += monto
+  if (metodo === 'MIXTO') {
+    total.efectivo += Number(gasto.efectivo || 0)
+    total.transferencia += Number(gasto.transferencia || 0)
+  } else if (metodo.includes('TRANSFERENCIA')) total.transferencia += monto
   else if (metodo.includes('TARJETA')) total.tarjeta += monto
   else total.efectivo += monto
   return total
@@ -201,6 +228,8 @@ function abrirEditar(gasto: any) {
     comentario: gasto.comentario || '',
     metodo_pago: String(gasto.metodo_pago || 'EFECTIVO').toUpperCase(),
     banco_id: gasto.banco_id ? Number(gasto.banco_id) : null,
+    efectivo: Number(gasto.efectivo || 0),
+    transferencia: Number(gasto.transferencia || 0),
   }
   dialogVisible.value = true
 }
@@ -225,9 +254,17 @@ async function guardar() {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'La cantidad es requerida', life: 3000 })
     return
   }
-  if (form.value.metodo_pago === 'TRANSFERENCIA' && !form.value.banco_id) {
+  if ((form.value.metodo_pago === 'TRANSFERENCIA' || form.value.metodo_pago === 'MIXTO') && !form.value.banco_id) {
     toast.add({ severity: 'warn', summary: 'Banco requerido', detail: 'Selecciona el banco de donde saldra el dinero', life: 3000 })
     return
+  }
+  if (form.value.metodo_pago === 'MIXTO') {
+    const efectivo = Number(form.value.efectivo || 0)
+    const transferencia = Number(form.value.transferencia || 0)
+    if (!(efectivo > 0) || !(transferencia > 0) || Math.abs((efectivo + transferencia) - Number(form.value.cantidad)) >= 0.01) {
+      toast.add({ severity: 'warn', summary: 'Distribucion incorrecta', detail: 'Efectivo y transferencia deben ser mayores que cero y sumar el total del gasto', life: 3500 })
+      return
+    }
   }
 
   try {
@@ -255,6 +292,8 @@ async function guardar() {
       hora: horaStr,
       comentario: form.value.comentario.trim().toUpperCase(),
       metodo_pago: form.value.metodo_pago,
+      efectivo: form.value.metodo_pago === 'EFECTIVO' ? Number(form.value.cantidad) : Number(form.value.efectivo || 0),
+      transferencia: form.value.metodo_pago === 'TRANSFERENCIA' ? Number(form.value.cantidad) : Number(form.value.transferencia || 0),
       banco_id: banco?.id || 0,
       banco_uid: banco?.uid || '',
       turno_id: isEditing.value
@@ -483,7 +522,12 @@ onMounted(async () => {
           <template #body="{ data }">{{ $formatMoney(data.cantidad) }}</template>
         </Column>
         <Column field="metodo_pago" header="Metodo" sortable style="width: 10rem">
-          <template #body="{ data }">{{ data.metodo_pago || 'EFECTIVO' }}</template>
+          <template #body="{ data }">
+            <div class="font-semibold">{{ data.metodo_pago || 'EFECTIVO' }}</div>
+            <div v-if="String(data.metodo_pago || '').toUpperCase() === 'MIXTO'" class="text-xs text-surface-500 mt-1">
+              Efectivo: {{ $formatMoney(data.efectivo || 0) }}<br>Transferencia: {{ $formatMoney(data.transferencia || 0) }}
+            </div>
+          </template>
         </Column>
         <Column field="banco_nombre" header="Banco" sortable style="width: 11rem" />
         <Column field="comentario" header="Comentario" sortable />
@@ -527,6 +571,10 @@ onMounted(async () => {
                 {{ formatFecha(gasto.fecha) }} - {{ gasto.hora || '--:--' }}
               </p>
               <p class="text-xs text-surface-400 mt-1">{{ gasto.metodo_pago || 'EFECTIVO' }}<span v-if="gasto.banco_nombre"> · {{ gasto.banco_nombre }}</span></p>
+              <div v-if="String(gasto.metodo_pago || '').toUpperCase() === 'MIXTO'" class="flex flex-wrap gap-2 mt-2 text-xs">
+                <span class="px-2 py-1 rounded-md bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><i class="pi pi-money-bill mr-1"></i>Efectivo: {{ $formatMoney(gasto.efectivo || 0) }}</span>
+                <span class="px-2 py-1 rounded-md bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300"><i class="pi pi-building-columns mr-1"></i>Transferencia: {{ $formatMoney(gasto.transferencia || 0) }}</span>
+              </div>
             </div>
 
             <div class="flex gap-2 mt-auto pt-2 border-t border-surface-100 dark:border-surface-700">
@@ -593,12 +641,24 @@ onMounted(async () => {
         </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Metodo de pago</label>
-          <select v-model="form.metodo_pago" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700" @change="form.banco_id = null">
+          <select v-model="form.metodo_pago" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700" @change="cambiarMetodoPago">
             <option value="EFECTIVO">Efectivo</option>
             <option value="TRANSFERENCIA">Transferencia</option>
+            <option value="MIXTO">Mixto (efectivo + transferencia)</option>
           </select>
         </div>
-        <div v-if="form.metodo_pago === 'TRANSFERENCIA'" class="flex flex-col gap-1">
+        <div v-if="form.metodo_pago === 'MIXTO'" class="grid grid-cols-2 gap-3">
+          <div class="flex flex-col gap-1">
+            <label class="font-semibold text-sm">Parte en efectivo</label>
+            <InputNumber v-model="form.efectivo" :min="0" :max="Number(form.cantidad || 0)" :minFractionDigits="2" :maxFractionDigits="2" fluid @update:modelValue="ajustarMixtoDesdeEfectivo" />
+          </div>
+          <div class="flex flex-col gap-1">
+            <label class="font-semibold text-sm">Parte transferida</label>
+            <InputNumber v-model="form.transferencia" :min="0" :max="Number(form.cantidad || 0)" :minFractionDigits="2" :maxFractionDigits="2" fluid @update:modelValue="ajustarMixtoDesdeTransferencia" />
+          </div>
+          <small class="col-span-2" :class="distribucionMixtaValida ? 'text-emerald-600' : 'text-red-500'">Efectivo + transferencia: {{ $formatMoney(Number(form.efectivo || 0) + Number(form.transferencia || 0)) }} de {{ $formatMoney(form.cantidad || 0) }}.</small>
+        </div>
+        <div v-if="form.metodo_pago === 'TRANSFERENCIA' || form.metodo_pago === 'MIXTO'" class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Banco de origen</label>
           <select v-model="form.banco_id" class="w-full px-3 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-surface-0 dark:bg-surface-700">
             <option :value="null">Seleccionar banco</option>
@@ -610,7 +670,7 @@ onMounted(async () => {
 
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="form.metodo_pago === 'TRANSFERENCIA' && !form.banco_id" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="((form.metodo_pago === 'TRANSFERENCIA' || form.metodo_pago === 'MIXTO') && !form.banco_id) || !distribucionMixtaValida" @click="guardar" />
       </template>
     </Dialog>
 

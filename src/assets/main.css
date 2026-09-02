@@ -38,6 +38,7 @@
   --app-surface-muted: rgba(248, 250, 252, 0.88);
   --app-border: rgba(203, 213, 225, 0.82);
   --app-border-strong: rgba(148, 163, 184, 0.72);
+  --app-blur: 14px;
 }
 
 /* ─── Design Tokens: Dark ─── */
@@ -55,9 +56,67 @@
   --app-surface-muted: rgba(30, 41, 59, 0.62);
   --app-border: rgba(71, 85, 105, 0.78);
   --app-border-strong: rgba(100, 116, 139, 0.78);
+  --app-blur: 14px;
   --shadow-card: 0 14px 34px -26px rgb(0 0 0 / 0.82), 0 1px 2px rgb(0 0 0 / 0.34);
   --shadow-card-hover: 0 18px 44px -28px rgb(0 0 0 / 0.92), 0 2px 8px rgb(0 0 0 / 0.38);
   --shadow-dropdown: 0 20px 48px -18px rgb(0 0 0 / 0.72);
+}
+
+/* ─── Visual Style: Glass ───
+   Opt-in theme (Configuracion > Sistema > Estilo Visual). Overrides the
+   --app-* surface tokens that cards/panels/dialogs already read, so most
+   of the UI turns translucent/blurred without per-component changes. */
+.theme-glass {
+  --app-surface: rgba(255, 255, 255, 0.5);
+  --app-surface-solid: rgba(255, 255, 255, 0.72);
+  --app-surface-muted: rgba(255, 255, 255, 0.38);
+  --app-border: rgba(255, 255, 255, 0.55);
+  --app-border-strong: rgba(255, 255, 255, 0.8);
+  --app-blur: 22px;
+}
+
+.theme-glass body {
+  background:
+    radial-gradient(circle at 12% 12%, rgba(99, 102, 241, 0.32), transparent 42%),
+    radial-gradient(circle at 88% 22%, rgba(236, 72, 153, 0.26), transparent 42%),
+    radial-gradient(circle at 50% 92%, rgba(16, 185, 129, 0.24), transparent 48%),
+    linear-gradient(160deg, #eef2ff 0%, #f8fafc 55%, #e0f2fe 100%);
+  background-attachment: fixed;
+}
+
+.theme-glass.dark {
+  --app-surface: rgba(15, 23, 42, 0.4);
+  --app-surface-solid: rgba(15, 23, 42, 0.65);
+  --app-surface-muted: rgba(30, 41, 59, 0.32);
+  --app-border: rgba(148, 163, 184, 0.26);
+  --app-border-strong: rgba(148, 163, 184, 0.42);
+}
+
+.theme-glass.dark body {
+  background:
+    radial-gradient(circle at 12% 12%, rgba(99, 102, 241, 0.34), transparent 42%),
+    radial-gradient(circle at 88% 22%, rgba(236, 72, 153, 0.22), transparent 42%),
+    radial-gradient(circle at 50% 92%, rgba(16, 185, 129, 0.2), transparent 48%),
+    linear-gradient(160deg, #020617 0%, #0f172a 55%, #020617 100%);
+  background-attachment: fixed;
+}
+
+.theme-glass :where(.p-dialog-header, .p-dialog-content, .p-dialog-footer) {
+  backdrop-filter: blur(var(--app-blur));
+}
+
+.theme-glass :where(.p-datatable-tbody > tr) {
+  background: var(--app-surface-muted) !important;
+}
+
+.theme-glass :where(.p-inputtext, .p-password-input, .p-inputnumber-input, .p-select, .p-multiselect, .p-textarea) {
+  background: rgba(255, 255, 255, 0.65) !important;
+  backdrop-filter: blur(8px);
+}
+
+.theme-glass.dark :where(.p-inputtext, .p-password-input, .p-inputnumber-input, .p-select, .p-multiselect, .p-textarea) {
+  background: rgba(15, 23, 42, 0.5) !important;
+  backdrop-filter: blur(8px);
 }
 
 /* ─── Base Styles ─── */
@@ -116,7 +175,7 @@
     border-radius: var(--radius-2xl);
     padding: 1.25rem;
     box-shadow: var(--shadow-card);
-    backdrop-filter: blur(14px);
+    backdrop-filter: blur(var(--app-blur));
     transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
   }
   .dark .card-pro {
@@ -164,7 +223,7 @@
     background: var(--app-surface);
     padding: 1.25rem;
     box-shadow: var(--shadow-card);
-    backdrop-filter: blur(14px);
+    backdrop-filter: blur(var(--app-blur));
   }
   .dark .section-pro {
     background: var(--app-surface);
@@ -284,7 +343,7 @@
     border: 1px solid var(--app-border) !important;
     background: var(--app-surface) !important;
     box-shadow: var(--shadow-card);
-    backdrop-filter: blur(14px);
+    backdrop-filter: blur(var(--app-blur));
   }
 
   :where(.p-toolbar) {
@@ -305,7 +364,7 @@
   }
 
   :where(.dark .p-dialog-header) {
-    background: #0f172a;
+    background: var(--app-surface-solid);
   }
 
   :where(.p-dialog-title) {
@@ -319,7 +378,7 @@
   }
 
   :where(.dark .p-dialog-content) {
-    background: #0f172a !important;
+    background: var(--app-surface-solid) !important;
   }
 
   :where(.p-dialog-footer) {
@@ -329,7 +388,7 @@
   }
 
   :where(.dark .p-dialog-footer) {
-    background: #0f172a !important;
+    background: var(--app-surface-solid) !important;
   }
 
   :where(.p-datatable) {
@@ -397,7 +456,7 @@
     border-radius: 0.75rem !important;
     box-shadow: var(--shadow-dropdown) !important;
     border: 1px solid var(--app-border) !important;
-    backdrop-filter: blur(14px);
+    backdrop-filter: blur(var(--app-blur));
   }
 
   .page-title {

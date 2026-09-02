@@ -15,9 +15,7 @@ import InputIcon from 'primevue/inputicon'
 import InputOtp from 'primevue/inputotp'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
-import QRCode from 'qrcode'
 import JsBarcode from 'jsbarcode'
-import html2canvas from 'html2canvas'
 
 import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
 import { ensureConfigLoaded, getConfig, getImageUrl } from '@/services/tmCloudClient'
@@ -56,6 +54,12 @@ import { sanitizePrintableHtml } from '@/utils/htmlSecurity'
 import { matchesSearch } from '@/composables/useSearch'
 import { filterPosCatalog, filterPosCustomers, searchGlobalPosCatalog } from '@/domain/posCatalog'
 import { imeiBelongsToPhone, resolvePhoneForImei } from '@/domain/phoneImeiRelation'
+
+async function crearQrDataUrl(contenido: string, opciones: any): Promise<string> {
+  const { default: QRCode } = await import('qrcode')
+  return QRCode.toDataURL(contenido, opciones)
+}
+
 const { store: almacenActivoStore, filterByAlmacen, addAlmacenId: addAlmacenIdFilter } = useAlmacenFilter()
 const { taxName, currency: systemCurrency, locale: systemLocale, currencySymbol, isDominicanFiscal } = useLocaleProfile()
 
@@ -89,9 +93,16 @@ const columnasCards = ref(3)
 const opcionesColumnasCards = [2, 3, 4, 5]
 const productosScrollRef = ref<HTMLElement | null>(null)
 const mostrarBotonArriba = ref(false)
+const PRODUCTOS_INICIALES = 48
+const PRODUCTOS_POR_LOTE = 36
+const limiteProductosVisibles = ref(PRODUCTOS_INICIALES)
 
 function manejarScrollProductos(event: Event) {
-  mostrarBotonArriba.value = (event.currentTarget as HTMLElement).scrollTop > 240
+  const element = event.currentTarget as HTMLElement
+  mostrarBotonArriba.value = element.scrollTop > 240
+  if (element.scrollTop + element.clientHeight >= element.scrollHeight - 320) {
+    limiteProductosVisibles.value += PRODUCTOS_POR_LOTE
+  }
 }
 
 function irArribaProductos() {
@@ -134,7 +145,7 @@ const marcas = ref<any[]>([])
 const categorias = ref<any[]>([])
 
 const contadorTelefonos = computed(() => ocultarSinStock.value
-  ? telefonos.value.filter((telefono: any) => imeisDisponibles.value.some((imei: any) => imeiPerteneceTelefono(imei, telefono))).length
+  ? telefonos.value.filter((telefono: any) => cantidadImeisTelefono(telefono) > 0).length
   : telefonos.value.length)
 const contadorAccesorios = computed(() => ocultarSinStock.value
   ? accesorios.value.filter((accesorio: any) => Number(accesorio.cantidad || 0) > 0).length
@@ -144,7 +155,7 @@ const contadorElectrodomesticos = computed(() => ocultarSinStock.value
   : electrodomesticos.value.length)
 
 const cart = ref<any[]>([])
-const loading = ref(false)
+const loading = ref(true)
 const dialogVariantes = ref(false)
 const busquedaImei = ref('')
 const selectedTelefono = ref<any>(null)
@@ -537,8 +548,36 @@ function imeiPerteneceTelefono(imei: any, telefono: any): boolean {
   return imeiBelongsToPhone(imei, telefono)
 }
 
-type ResumenCatalogo = { capacidades: string; colores: string; precioMayor: number }
-const resumenCatalogoVacio: ResumenCatalogo = { capacidades: '', colores: '', precioMayor: 0 }
+function claveTelefonoCatalogo(telefono: any): string {
+  return String(telefono?.uid || telefono?.id || '')
+}
+
+// Resolver la relacion IMEI/telefono es costoso por la compatibilidad con datos
+// antiguos. Se hace una sola vez por carga y el resto del POS consulta este indice.
+const imeisPorTelefono = computed(() => {
+  const indice = new Map<string, any[]>()
+  for (const telefono of telefonos.value) indice.set(claveTelefonoCatalogo(telefono), [])
+  for (const imei of imeisDisponibles.value) {
+    const telefono = resolvePhoneForImei(imei, telefonos.value)
+    if (!telefono) continue
+    const clave = claveTelefonoCatalogo(telefono)
+    const unidades = indice.get(clave)
+    if (unidades) unidades.push(imei)
+    else indice.set(clave, [imei])
+  }
+  return indice
+})
+
+function imeisTelefono(telefono: any): any[] {
+  return imeisPorTelefono.value.get(claveTelefonoCatalogo(telefono)) || []
+}
+
+function cantidadImeisTelefono(telefono: any): number {
+  return imeisTelefono(telefono).length
+}
+
+type ResumenCatalogo = { capacidades: string; colores: string; precioMayor: number; cantidad: number }
+const resumenCatalogoVacio: ResumenCatalogo = { capacidades: '', colores: '', precioMayor: 0, cantidad: 0 }
 
 function construirResumenCatalogo(unidades: any[]): ResumenCatalogo {
   const resumir = (campo: 'capacidad' | 'color') => {
@@ -551,15 +590,14 @@ function construirResumenCatalogo(unidades: any[]): ResumenCatalogo {
     capacidades: resumir('capacidad'),
     colores: resumir('color'),
     precioMayor: precios.length ? Math.max(...precios) : 0,
+    cantidad: unidades.length,
   }
 }
 
 const resumenTelefonosCatalogo = computed(() => {
   const resumen = new Map<string, ResumenCatalogo>()
   for (const telefono of telefonos.value) {
-    resumen.set(String(telefono.uid || telefono.id), construirResumenCatalogo(
-      imeisDisponibles.value.filter((imei: any) => imeiPerteneceTelefono(imei, telefono))
-    ))
+    resumen.set(claveTelefonoCatalogo(telefono), construirResumenCatalogo(imeisTelefono(telefono)))
   }
   return resumen
 })
@@ -575,7 +613,7 @@ const resumenElectroCatalogo = computed(() => {
 })
 
 function resumenTelefonoCatalogo(telefono: any): ResumenCatalogo {
-  return resumenTelefonosCatalogo.value.get(String(telefono.uid || telefono.id)) || resumenCatalogoVacio
+  return resumenTelefonosCatalogo.value.get(claveTelefonoCatalogo(telefono)) || resumenCatalogoVacio
 }
 
 function resumenEquipoCatalogo(equipo: any): ResumenCatalogo {
@@ -596,7 +634,7 @@ const productosFiltradosCombo = computed(() => {
   let lista: any[] = []
   if (tipo === 'telefono') {
     lista = telefonos.value.map(t => {
-      const imeis = imeisDisponibles.value.filter((i: any) => imeiPerteneceTelefono(i, t))
+      const imeis = imeisTelefono(t)
       return { ...t, precio_venta: imeis[0]?.precio_venta || 0, costo: imeis[0]?.costo || 0, stock: imeis.length }
     })
   } else if (tipo === 'accesorio') {
@@ -609,7 +647,7 @@ const productosFiltradosCombo = computed(() => {
   } else {
     lista = [
       ...telefonos.value.map(t => {
-        const imeis = imeisDisponibles.value.filter((i: any) => imeiPerteneceTelefono(i, t))
+        const imeis = imeisTelefono(t)
         return { ...t, precio_venta: imeis[0]?.precio_venta || 0, costo: imeis[0]?.costo || 0, _tipo: 'telefono' }
       }),
       ...accesorios.value.map(a => ({ ...a, _tipo: 'accesorio' })),
@@ -868,6 +906,17 @@ function compBadge(tipo: string): string {
 }
 
 const productosFiltrados = computed(() => {
+  if (activeTab.value === 'celulares') {
+    const query = busquedaProdFiltrada.value.trim()
+    const data = ocultarSinStock.value
+      ? telefonos.value.filter((telefono: any) => cantidadImeisTelefono(telefono) > 0)
+      : telefonos.value
+    if (!query) return data
+    return data.filter((telefono: any) =>
+      matchesSearch(telefono, query, ['nombre', 'marca', 'modelo', 'codigo_barra'])
+      || imeisTelefono(telefono).some((imei: any) => matchesSearch(imei, query, ['nombre']))
+    )
+  }
   return filterPosCatalog({
     tab: activeTab.value, query: busquedaProdFiltrada.value, hideOutOfStock: ocultarSinStock.value,
     phones: telefonos.value, appliances: electrodomesticos.value, accessories: accesorios.value,
@@ -892,6 +941,13 @@ const resultadosBusquedaGlobal = computed(() => searchGlobalPosCatalog({
 const cantidadResultadosPos = computed(() => busquedaGlobalActiva.value
   ? resultadosBusquedaGlobal.value.length
   : productosFiltrados.value.length)
+const productosVisibles = computed(() => productosFiltrados.value.slice(0, limiteProductosVisibles.value))
+const resultadosBusquedaGlobalVisibles = computed(() => resultadosBusquedaGlobal.value.slice(0, limiteProductosVisibles.value))
+
+watch([activeTab, busquedaProdFiltrada, ocultarSinStock], () => {
+  limiteProductosVisibles.value = PRODUCTOS_INICIALES
+  productosScrollRef.value?.scrollTo({ top: 0 })
+})
 
 function buscarImei() {
   const texto = busquedaProd.value.trim()
@@ -900,7 +956,7 @@ function buscarImei() {
   const imeiExacto = imeisDisponibles.value.find(i => String(i.nombre || '').trim().toLowerCase() === normalizado)
   if (imeiExacto) {
     activeTab.value = 'celulares'
-    selectedTelefono.value = telefonos.value.find((telefono: any) => imeiPerteneceTelefono(imeiExacto, telefono)) || null
+    selectedTelefono.value = telefonoDeImei(imeiExacto)
     imeiParaPrecio.value = imeiExacto
     precioSeleccionado.value = 'venta'
     precioManual.value = imeiExacto.precio_venta || 0
@@ -1264,7 +1320,7 @@ async function imprimirEtiquetaOrdenTallerPos(plantilla: any) {
     } else if (el.tipo === 'barcode') {
       html += `<div class="elem" style="${style}overflow:hidden">${generarBarcodeSVG(aplicarVariablesEtiquetaTallerPos(el.contenido, orden))}</div>`
     } else if (el.tipo === 'qr') {
-      const qrData = await QRCode.toDataURL(aplicarVariablesEtiquetaTallerPos(el.contenido, orden), { width: 200, margin: 1 })
+      const qrData = await crearQrDataUrl(aplicarVariablesEtiquetaTallerPos(el.contenido, orden), { width: 200, margin: 1 })
       html += `<img class="elem" style="${style}object-fit:contain;max-width:100%;max-height:100%" src="${qrData}" />`
     }
   }
@@ -2016,7 +2072,7 @@ async function imprimirFacturaFactCoti() {
   const qrUrl = alanubeDocumentStampUrl || `https://tmposrd.com/factura/${factura.no_factura || factura.id}`
   let qrDataUrl = ''
   try {
-    qrDataUrl = await QRCode.toDataURL(qrUrl, { width: 120, margin: 1, color: { dark: '#000000', light: '#ffffff' } })
+    qrDataUrl = await crearQrDataUrl(qrUrl, { width: 120, margin: 1, color: { dark: '#000000', light: '#ffffff' } })
   } catch (_) {}
 
   ticketData.value = {
@@ -2732,7 +2788,7 @@ async function cargarImeisDisponibles() {
 function abrirVariantes(telefono: any) {
   selectedTelefono.value = telefono
   selectedElectrodomestico.value = null
-  variantesImei.value = imeisDisponibles.value.filter((i: any) => imeiPerteneceTelefono(i, telefono))
+  variantesImei.value = imeisTelefono(telefono)
   variantesSerial.value = []
   busquedaImei.value = ''
   dialogVariantes.value = true
@@ -2753,7 +2809,7 @@ const elecSearch = ref('')
 function imeisDelTel(telefonoId: number) {
   const texto = imeiSearch.value.toLowerCase().trim()
   const telefono = telefonos.value.find((item: any) => Number(item.id) === Number(telefonoId))
-  let list = imeisDisponibles.value.filter((i: any) => imeiPerteneceTelefono(i, telefono))
+  let list = imeisTelefono(telefono)
   if (texto) {
     list = list.filter((i: any) =>
       i.nombre?.toLowerCase().includes(texto) ||
@@ -3533,6 +3589,7 @@ async function compartirImagen() {
 
     await new Promise(r => setTimeout(r, 800))
 
+    const { default: html2canvas } = await import('html2canvas')
     const canvas = await html2canvas(container, { scale: 2, useCORS: true, backgroundColor: '#ffffff' })
     container.remove()
     container = null
@@ -3607,7 +3664,7 @@ async function asegurarQrFiscalTicket() {
   if (!d || d.qr || !debeForzarQrTicket(d)) return
   const qrValue = d.document_stamp_url || `https://tmposrd.com/factura/${d.no_factura || ''}`
   try {
-    d.qr = await QRCode.toDataURL(qrValue, { width: 180, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })
+    d.qr = await crearQrDataUrl(qrValue, { width: 180, margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })
   } catch (error: any) {
     console.error('No se pudo generar QR fiscal:', error)
   }
@@ -4742,7 +4799,7 @@ async function completarVenta() {
     const qrUrl = alanubeDocumentStampUrl || `https://tmposrd.com/factura/${invoiceNo}`
     let qrDataUrl = ''
     try {
-      qrDataUrl = await QRCode.toDataURL(qrUrl, { width: 120, margin: 1, color: { dark: '#000000', light: '#ffffff' } })
+      qrDataUrl = await crearQrDataUrl(qrUrl, { width: 120, margin: 1, color: { dark: '#000000', light: '#ffffff' } })
     } catch (_) {}
 
     ticketData.value = {
@@ -5035,16 +5092,18 @@ onMounted(async () => {
   await almacenActivoStore.load()
   window.addEventListener('ventas-config-changed', aplicarConfigVentas)
   window.addEventListener('inventory-changed', refrescarInventarioPos)
-  try {
-    const datosJSON = await envioElectron('datosarchivo')
-    if (datosJSON) {
-      link.value = datosJSON.VITE_LINKURL || ''
-      api.value = datosJSON.VITE_LINK_API || ''
-      token.value = datosJSON.VITE_TOKEN || ''
+  const electronConfigPromise = (async () => {
+    try {
+      const datosJSON = await envioElectron('datosarchivo')
+      if (datosJSON) {
+        link.value = datosJSON.VITE_LINKURL || ''
+        api.value = datosJSON.VITE_LINK_API || ''
+        token.value = datosJSON.VITE_TOKEN || ''
+      }
+    } catch (error) {
+      console.error('Error cargando configuracion:', error)
     }
-  } catch (error) {
-    console.error('Error cargando configuracion:', error)
-  }
+  })()
 
   const shortcuts = useAtajosTeclado({
   'ctrl+k': () => { spotlight.abrirSpotlight(systemMode.isGeneralStore ? [] : telefonos.value, accesorios.value, clientes.value) },
@@ -5107,70 +5166,67 @@ onMounted(async () => {
     }
   )
 
-  loading.value = true
-  await Promise.all([cargarProductos(), cargarImeisDisponibles()])
-  await cargarEstado()
-
-  try {
-    const res = await window.db.getAll('impresoras_config')
-    if (res.success && res.data?.length > 0) {
-      ticketConfig.value = { ...ticketConfig.value, ...res.data[0] }
-      printerName.value = ticketConfig.value.printer_name || ''
-    }
-  } catch (_) {}
-
-  try {
-    const resEmp = await window.db.getAll('empresa')
-    if (resEmp.success && resEmp.data?.length > 0) {
-      const uid = String(almacenActivoStore.activeUid || '')
-      const e = (uid && resEmp.data.find((item: any) => String(item.uid || item.almacen_uid || '') === uid)) || resEmp.data[0]
-      empresaNombre.value = e.nombre || 'MI EMPRESA'
-      empresaRnc.value = e.legal || ''
-      empresaTelefono.value = e.telefono || ''
-      empresaDireccion.value = e.direccion || ''
-      empresaEmail.value = e.email || ''
-      empresaLogo.value = e.logo || ''
-      empresaTipoDoc.value = e.tipo_documento_defecto || ''
-    }
-  } catch (_) {}
-
-  await Promise.all([cargarConfigFacturacionElectronica(), cargarColumnasCards()])
-
-  try {
-    const resComp = await window.db.getAll('comprobantes_fiscales')
-    if (resComp.success) {
-      comprobantes.value = (resComp.data || []).filter((c: any) => c.activo)
-
-      const tipoDocMap: Record<string, string> = {
-        SIN_COMPROBANTE: 'SIN',
-        FACTURA_CONSUMO: 'E32',
-        FACTURA_CREDITO: 'E31',
-        NOTA_DEBITO: 'E33',
-        NOTA_CREDITO: 'E34',
-        PROFORMA: 'SIN',
-        TICKET: 'SIN',
+  const estadoPromise = cargarEstado()
+  const fiscalPromise = cargarConfigFacturacionElectronica()
+  const impresoraPromise = (async () => {
+    try {
+      const res = await window.db.getAll('impresoras_config')
+      if (res.success && res.data?.length > 0) {
+        ticketConfig.value = { ...ticketConfig.value, ...res.data[0] }
+        printerName.value = ticketConfig.value.printer_name || ''
       }
-      const tipoDefecto = empresaTipoDoc.value || ''
-      const compTipoDefecto = tipoDocMap[tipoDefecto]
-      const compDefecto = compTipoDefecto
-        ? comprobantes.value.find((c: any) => c.tipo === compTipoDefecto)
-        : null
+    } catch (_) {}
+  })()
+  const comprobantesPromise = (async () => {
+    await Promise.all([estadoPromise, fiscalPromise])
+    try {
+      const resComp = await window.db.getAll('comprobantes_fiscales')
+      if (resComp.success) {
+        comprobantes.value = (resComp.data || []).filter((c: any) => c.activo)
 
-      if (facturacionElectronicaActiva.value) {
-        seleccionarComprobanteDisponible()
-      } else {
-        const defaultComp = comprobantes.value.find((c: any) => String(c.tipo || '').toUpperCase() === 'SIN') || compDefecto || comprobantes.value.find((c: any) => c.es_default)
-        if (defaultComp) comprobanteSeleccionado.value = defaultComp
-        else if (comprobantes.value.length > 0) comprobanteSeleccionado.value = comprobantes.value[0]
+        const tipoDocMap: Record<string, string> = {
+          SIN_COMPROBANTE: 'SIN',
+          FACTURA_CONSUMO: 'E32',
+          FACTURA_CREDITO: 'E31',
+          NOTA_DEBITO: 'E33',
+          NOTA_CREDITO: 'E34',
+          PROFORMA: 'SIN',
+          TICKET: 'SIN',
+        }
+        const tipoDefecto = empresaTipoDoc.value || ''
+        const compTipoDefecto = tipoDocMap[tipoDefecto]
+        const compDefecto = compTipoDefecto
+          ? comprobantes.value.find((c: any) => c.tipo === compTipoDefecto)
+          : null
+
+        if (facturacionElectronicaActiva.value) {
+          seleccionarComprobanteDisponible()
+        } else {
+          const defaultComp = comprobantes.value.find((c: any) => String(c.tipo || '').toUpperCase() === 'SIN') || compDefecto || comprobantes.value.find((c: any) => c.es_default)
+          if (defaultComp) comprobanteSeleccionado.value = defaultComp
+          else if (comprobantes.value.length > 0) comprobanteSeleccionado.value = comprobantes.value[0]
+        }
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  })()
+  const metodosPagoPromise = (async () => {
+    try {
+      const resMP = await (window as any).electron.invoke('db:getAll', 'metodos_pago')
+      if (resMP.success && resMP.data) metodosPagoDB.value = resMP.data
+    } catch (_) {}
+  })()
 
-  try {
-    const resMP = await (window as any).electron.invoke('db:getAll', 'metodos_pago')
-    if (resMP.success && resMP.data) metodosPagoDB.value = resMP.data
-  } catch (_) {}
-
+  await Promise.all([
+    electronConfigPromise,
+    cargarProductos(),
+    cargarImeisDisponibles(),
+    estadoPromise,
+    fiscalPromise,
+    cargarColumnasCards(),
+    impresoraPromise,
+    comprobantesPromise,
+    metodosPagoPromise,
+  ])
   loading.value = false
 
   if (!noFactura.value) noFactura.value = generarNoFactura()
@@ -5425,7 +5481,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
               </div>
               <div v-else class="pos-product-grid grid gap-2.5" :style="{ '--pos-card-columns': columnasCards }">
                 <button
-                  v-for="resultado in resultadosBusquedaGlobal"
+                  v-for="resultado in resultadosBusquedaGlobalVisibles"
                   :key="resultado.key"
                   type="button"
                   class="min-h-[150px] rounded-xl border p-3.5 flex flex-col gap-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-md cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
@@ -5473,10 +5529,10 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
                     </p>
                     <div class="flex items-center justify-between gap-2 mt-auto">
                       <span v-if="resultado.type === 'telefono'" class="text-[11px] text-surface-500">
-                        {{ imeisDisponibles.filter(i => imeiPerteneceTelefono(i, resultado.item)).length }} disponibles
+                        {{ resumenTelefonoCatalogo(resultado.item).cantidad }} disponibles
                       </span>
                       <span v-else-if="resultado.type === 'electrodomestico'" class="text-[11px] text-surface-500">
-                        {{ serialesDisponibles.filter(i => serialPerteneceEquipo(i, resultado.item)).length }} disponibles
+                        {{ resumenEquipoCatalogo(resultado.item).cantidad }} disponibles
                       </span>
                       <span v-else class="text-[11px] text-surface-500">Stock: {{ resultado.item.cantidad || 0 }}</span>
                       <span v-if="resultado.type === 'accesorio'" class="font-bold text-sm text-emerald-600 dark:text-emerald-400 shrink-0">
@@ -5495,7 +5551,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
               </div>
               <div v-else class="pos-product-grid grid gap-2.5" :style="{ '--pos-card-columns': columnasCards }">
                 <div
-                  v-for="tel in productosFiltrados"
+                  v-for="tel in productosVisibles"
                   :key="tel.id"
                   class="flip-card perspective-[1000px]"
                 >
@@ -5511,13 +5567,13 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
                       @contextmenu.prevent="() => { flippedTelId = flippedTelId === tel.id ? null : tel.id; imeiSearch = '' }"
                     >
                       <div class="pos-product-media pos-product-media--phone w-[42%] min-w-[110px] h-full shrink-0">
-                        <img v-if="getImageUrl(tel.imagen)" :src="getImageUrl(tel.imagen)" class="w-full h-full object-contain p-2.5 transition-transform duration-300 group-hover:scale-105" alt="" />
+                        <img v-if="getImageUrl(tel.imagen)" :src="getImageUrl(tel.imagen)" loading="lazy" decoding="async" class="w-full h-full object-contain p-2.5 transition-transform duration-300 group-hover:scale-105" alt="" />
                         <div v-else class="w-full h-full bg-gradient-to-br from-violet-400 to-indigo-600 flex items-center justify-center">
                           <i class="pi pi-mobile text-white text-4xl drop-shadow-sm"></i>
                         </div>
                         <span class="pos-product-type">Celular</span>
                         <span class="pos-product-stock">
-                          {{ imeisDisponibles.filter(i => imeiPerteneceTelefono(i, tel)).length }} disp.
+                          {{ resumenTelefonoCatalogo(tel).cantidad }} disp.
                         </span>
                       </div>
                       <div class="pos-product-content flex-1 min-w-0 p-3.5 flex flex-col">
@@ -5543,6 +5599,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
 
                     <!-- BACK: IMEIs disponibles -->
                     <div
+                      v-if="flippedTelId === tel.id"
                       class="absolute inset-0 rounded-xl border border-violet-300 dark:border-violet-600 bg-surface-0 dark:bg-surface-800 p-3 flex flex-col gap-2 backface-hidden overflow-y-auto [transform:rotateY(180deg)]"
                       :style="productCardStyle('telefono', 'back')"
                       @contextmenu.prevent="flippedTelId = null"
@@ -5588,7 +5645,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
               </div>
               <div v-else class="pos-product-grid grid gap-2.5" :style="{ '--pos-card-columns': columnasCards }">
                 <div
-                  v-for="elec in productosFiltrados"
+                  v-for="elec in productosVisibles"
                   :key="elec.id"
                   class="flip-card perspective-[1000px]"
                 >
@@ -5604,13 +5661,13 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
                       @contextmenu.prevent="() => { flippedElecId = flippedElecId === elec.id ? null : elec.id; elecSearch = '' }"
                     >
                       <div class="pos-product-media pos-product-media--electro w-[42%] min-w-[110px] h-full shrink-0">
-                        <img v-if="getImageUrl(elec.imagen)" :src="getImageUrl(elec.imagen)" class="w-full h-full object-contain p-2.5 transition-transform duration-300 group-hover:scale-105" alt="" />
+                        <img v-if="getImageUrl(elec.imagen)" :src="getImageUrl(elec.imagen)" loading="lazy" decoding="async" class="w-full h-full object-contain p-2.5 transition-transform duration-300 group-hover:scale-105" alt="" />
                         <div v-else class="w-full h-full bg-gradient-to-br from-cyan-400 to-sky-600 flex items-center justify-center">
                           <i class="pi pi-sitemap text-white text-4xl drop-shadow-sm"></i>
                         </div>
                         <span class="pos-product-type">Electro</span>
                         <span class="pos-product-stock">
-                          {{ serialesDisponibles.filter(i => serialPerteneceEquipo(i, elec)).length }} disp.
+                          {{ resumenEquipoCatalogo(elec).cantidad }} disp.
                         </span>
                       </div>
                       <div class="pos-product-content flex-1 min-w-0 p-3.5 flex flex-col">
@@ -5785,7 +5842,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
               </div>
               <div v-else class="pos-product-grid grid gap-2.5" :style="{ '--pos-card-columns': columnasCards }">
                 <div
-                  v-for="acc in productosFiltrados"
+                  v-for="acc in productosVisibles"
                   :key="acc.id"
                   class="flip-card perspective-[1000px]"
                   :class="(acc.cantidad || 0) <= 0 ? 'opacity-50' : ''"
@@ -5802,7 +5859,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
                       @contextmenu.prevent="() => { flippedAccId = flippedAccId === acc.id ? null : acc.id }"
                     >
                       <div class="pos-product-media pos-product-media--accessory w-[42%] min-w-[110px] h-full shrink-0">
-                        <img v-if="getImageUrl(acc.imagen)" :src="getImageUrl(acc.imagen)" class="w-full h-full object-contain p-2.5 transition-transform duration-300 group-hover:scale-105" alt="" />
+                        <img v-if="getImageUrl(acc.imagen)" :src="getImageUrl(acc.imagen)" loading="lazy" decoding="async" class="w-full h-full object-contain p-2.5 transition-transform duration-300 group-hover:scale-105" alt="" />
                         <div v-else class="w-full h-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center">
                           <i class="pi pi-box text-white text-4xl drop-shadow-sm"></i>
                         </div>
@@ -7552,7 +7609,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
           <p class="text-xs text-surface-500 text-center">
             Consulta el codigo de 4 digitos en el Centro OTP: {{ factCotiOtpEmail || 'Configuracion > OTP Local' }}.
           </p>
-          <InputOtp v-model="factCotiOtp" :length="4" integerOnly />
+          <InputOtp v-model="factCotiOtp" :length="4" integerOnly mask />
         </div>
 
         <p v-if="factCotiOtpError" class="text-red-500 text-xs text-center">{{ factCotiOtpError }}</p>
@@ -8265,7 +8322,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
             <h3 class="text-lg font-bold">Pantalla bloqueada</h3>
             <p class="text-sm text-surface-500 mt-1">Ingresa tu PIN para continuar</p>
           </div>
-          <InputOtp v-model="lockScreen.pinLock" :length="4" integerOnly :disabled="lockScreen.pinLock.length === 4" @complete="lockScreen.desbloquear(lockScreen.pinLock); if (!lockScreen.isLocked) sonidos.playSuccess()" />
+          <InputOtp v-model="lockScreen.pinLock" :length="4" integerOnly mask :disabled="lockScreen.pinLock.length === 4" @complete="lockScreen.desbloquear(lockScreen.pinLock); if (!lockScreen.isLocked) sonidos.playSuccess()" />
           <p v-if="lockScreen.pinError" class="text-sm text-red-500">{{ lockScreen.pinError }}</p>
           <Button label="Desbloquear" icon="pi pi-unlock" class="w-full" :disabled="lockScreen.pinLock.length < 4" @click="lockScreen.desbloquear(lockScreen.pinLock); if (!lockScreen.isLocked) sonidos.playSuccess()" />
         </div>

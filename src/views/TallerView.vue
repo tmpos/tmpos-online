@@ -2,16 +2,11 @@
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
-import { ref, shallowRef, computed, nextTick } from 'vue'
+import { ref, shallowRef, computed, nextTick, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
-import OrdenesComp from '@/components/taller/OrdenesComp.vue'
-import TecnicosComp from '@/components/taller/TecnicosComp.vue'
-import PiezasComp from '@/components/taller/PiezasComp.vue'
-import GarantiasComp from '@/components/ventas/GarantiasComp.vue'
-import ReporteTallerComp from '@/components/taller/ReporteTallerComp.vue'
 import Toast from 'primevue/toast'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
@@ -21,6 +16,12 @@ import Dialog from 'primevue/dialog'
 import Select from 'primevue/select'
 import { useToast } from 'primevue/usetoast'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
+
+const OrdenesComp = defineAsyncComponent(() => import('@/components/taller/OrdenesComp.vue'))
+const TecnicosComp = defineAsyncComponent(() => import('@/components/taller/TecnicosComp.vue'))
+const PiezasComp = defineAsyncComponent(() => import('@/components/taller/PiezasComp.vue'))
+const GarantiasComp = defineAsyncComponent(() => import('@/components/ventas/GarantiasComp.vue'))
+const ReporteTallerComp = defineAsyncComponent(() => import('@/components/taller/ReporteTallerComp.vue'))
 
 const auth = useAuthStore()
 const toast = useToast()

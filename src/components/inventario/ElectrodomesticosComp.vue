@@ -36,7 +36,7 @@ const electrodomesticos = ref<any[]>([])
 const electrodomesticosRaw = ref<any[]>([])
 const verTodosAlmacenes = ref(false)
 const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
-const loading = ref(false)
+const loading = ref(true)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
@@ -108,6 +108,14 @@ const electrodomesticosFiltrados = computed(() => {
   return electrodomesticos.value.filter(t =>
     t.nombre?.toLowerCase().includes(texto)
   )
+})
+
+const ELECTRODOMESTICOS_INICIALES = 32
+const limiteElectrodomesticos = ref(ELECTRODOMESTICOS_INICIALES)
+const electrodomesticosVisibles = computed(() => electrodomesticosFiltrados.value.slice(0, limiteElectrodomesticos.value))
+
+watch(busqueda, () => {
+  limiteElectrodomesticos.value = ELECTRODOMESTICOS_INICIALES
 })
 
 const serialesDelElectrodomesticoFiltrados = computed(() => {
@@ -190,10 +198,16 @@ async function crearProveedorElect() {
   }
 }
 
+let cargaElectrodomesticosId = 0
+
 async function cargarElectrodomesticos() {
+  const cargaId = ++cargaElectrodomesticosId
   loading.value = true
   try {
-    const res = await window.db.getAll('electrodomesticos')
+    const equiposPromise = window.db.getAll('electrodomesticos')
+    const almacenPromise = almacenStore.almacenes.length > 0 ? Promise.resolve() : almacenStore.load()
+    const [res] = await Promise.all([equiposPromise, almacenPromise])
+    if (cargaId !== cargaElectrodomesticosId) return
     if (res.success) {
       electrodomesticosRaw.value = res.data || []
       electrodomesticos.value = verTodosAlmacenes.value ? electrodomesticosRaw.value : filterByAlmacen(res.data || [])
@@ -201,7 +215,7 @@ async function cargarElectrodomesticos() {
   } catch (error) {
     console.error(error)
   } finally {
-    loading.value = false
+    if (cargaId === cargaElectrodomesticosId) loading.value = false
   }
 }
 
@@ -665,27 +679,39 @@ function imagenUrl(uid: string | null | undefined): string | null {
 
 
 onMounted(async () => {
-  try {
-    const datosJSON = await envioElectron('datosarchivo');
-    if (datosJSON) {
-      link.value = datosJSON.VITE_LINKURL || '';
-      api.value = datosJSON.VITE_LINK_API || '';
-      token.value = datosJSON.VITE_TOKEN || '';
-      patronTelefono.value = datosJSON.VITE_PATRON_TELEFONO || '';
-      linkImpresora.value = datosJSON.VITE_IMPRESORA_LOCAL || '';
-      patroncedula.value = datosJSON.VITE_PATRON_CEDULA || '';
-      tokenCorto.value = datosJSON.VITE_TOKEN_CORTO || '';
+  // La lista principal entra primero en la cola de la base de datos.
+  const equiposPromise = cargarElectrodomesticos()
+  const configPromise = (async () => {
+    try {
+      const datosJSON = await envioElectron('datosarchivo')
+      if (datosJSON) {
+        link.value = datosJSON.VITE_LINKURL || ''
+        api.value = datosJSON.VITE_LINK_API || ''
+        token.value = datosJSON.VITE_TOKEN || ''
+        patronTelefono.value = datosJSON.VITE_PATRON_TELEFONO || ''
+        linkImpresora.value = datosJSON.VITE_IMPRESORA_LOCAL || ''
+        patroncedula.value = datosJSON.VITE_PATRON_CEDULA || ''
+        tokenCorto.value = datosJSON.VITE_TOKEN_CORTO || ''
+      }
+    } catch (error) {
+      console.error('Error cargando configuracion:', error)
     }
-  } catch (error) {
-    console.error("Error cargando configuracion:", error);
-  }
+  })()
+  const proveedoresPromise = (async () => {
+    try {
+      const resProv = await window.db.getAll('proveedores')
+      if (resProv.success) proveedores.value = resProv.data || []
+    } catch (error) {
+      console.error(error)
+    }
+  })()
 
-  await cargarElectrodomesticos()
-  const resProv = await window.db.getAll('proveedores')
-  if (resProv.success) proveedores.value = resProv.data || []
+  await equiposPromise
+  void configPromise
+  void proveedoresPromise
 })
 
-useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
+useCloudRefresh(['electrodomesticos'], cargarElectrodomesticos)
 </script>
 
 <template>
@@ -794,9 +820,10 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
       <div v-else>
         <div v-if="loading" class="text-center py-10 text-surface-500">Cargando...</div>
         <div v-else-if="electrodomesticosFiltrados.length === 0" class="text-center py-10 text-surface-500">No hay electrónicos registrados.</div>
-        <div v-else class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div v-else>
+          <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           <div
-            v-for="elec in electrodomesticosFiltrados"
+            v-for="elec in electrodomesticosVisibles"
             :key="elec.id"
             class="electro-card min-w-0 overflow-hidden rounded-2xl border border-surface-200 bg-surface-0 dark:border-surface-700 dark:bg-surface-800 flex flex-col cursor-pointer"
             @click="abrirDetalle(elec)"
@@ -815,6 +842,7 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
                 class="electro-card-image h-full w-full object-contain"
                 :alt="`Imagen de ${elec.nombre || 'electrodoméstico'}`"
                 loading="lazy"
+                decoding="async"
               />
               <div v-else class="flex h-24 w-24 items-center justify-center rounded-3xl border border-primary-200/70 bg-primary-100/80 shadow-inner dark:border-primary-800 dark:bg-primary-900/60">
                 <i class="pi pi-desktop text-4xl text-primary-600 dark:text-primary-300"></i>
@@ -830,6 +858,16 @@ useCloudRefresh(['electrodomesticos', 'serial'], cargarElectrodomesticos)
                 <i class="pi pi-arrow-right shrink-0 text-[11px] text-primary"></i>
               </div>
             </div>
+          </div>
+          </div>
+          <div v-if="electrodomesticosVisibles.length < electrodomesticosFiltrados.length" class="flex justify-center pt-4">
+            <Button
+              :label="`Mostrar más (${electrodomesticosFiltrados.length - electrodomesticosVisibles.length})`"
+              icon="pi pi-angle-down"
+              severity="secondary"
+              outlined
+              @click="limiteElectrodomesticos += ELECTRODOMESTICOS_INICIALES"
+            />
           </div>
         </div>
       </div>

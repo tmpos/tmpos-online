@@ -115,6 +115,7 @@ const colorRapidoNombre = ref('')
 const colorRapidoCodigo = ref('#000000')
 const capacidadRapidaVisible = ref(false)
 const capacidadRapidaNombre = ref('')
+const catalogoRapidoDestino = ref<'nuevo' | 'editar'>('nuevo')
 const estadosImei = [
   { label: 'DISPONIBLE', value: 'DISPONIBLE' },
   { label: 'VENDIDO', value: 'VENDIDO' },
@@ -122,13 +123,15 @@ const estadosImei = [
   { label: 'EN GARANTIA', value: 'EN GARANTIA' },
 ]
 
-function abrirColorRapido() {
+function abrirColorRapido(destino: 'nuevo' | 'editar' = 'nuevo') {
+  catalogoRapidoDestino.value = destino
   colorRapidoNombre.value = ''
   colorRapidoCodigo.value = '#000000'
   colorRapidoVisible.value = true
 }
 
-function abrirCapacidadRapida() {
+function abrirCapacidadRapida(destino: 'nuevo' | 'editar' = 'nuevo') {
+  catalogoRapidoDestino.value = destino
   capacidadRapidaNombre.value = ''
   capacidadRapidaVisible.value = true
 }
@@ -139,7 +142,8 @@ async function guardarCapacidadRapida() {
   const existentes = await window.db.getAll('capacidades')
   const repetida = existentes.success && (existentes.data || []).some((item: any) => String(item.nombre || '').toUpperCase() === nombre)
   if (repetida) {
-    imeiForm.value.capacidad = nombre
+    if (catalogoRapidoDestino.value === 'editar') editarImeiForm.value.capacidad = nombre
+    else imeiForm.value.capacidad = nombre
     capacidadRapidaVisible.value = false
     toast.add({ severity: 'info', summary: 'Capacidad seleccionada', detail: `${nombre} ya estaba registrada`, life: 2500 })
     return
@@ -149,7 +153,8 @@ async function guardarCapacidadRapida() {
     toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear la capacidad', life: 4000 })
     return
   }
-  imeiForm.value.capacidad = nombre
+  if (catalogoRapidoDestino.value === 'editar') editarImeiForm.value.capacidad = nombre
+  else imeiForm.value.capacidad = nombre
   capacidadRapidaVisible.value = false
   toast.add({ severity: 'success', summary: 'Capacidad creada', detail: `${nombre} fue creada y seleccionada`, life: 2500 })
 }
@@ -171,7 +176,8 @@ async function guardarColorRapido() {
   const existentes = await window.db.getAll('colores')
   const repetido = existentes.success && (existentes.data || []).some((color: any) => String(color.nombre || '').toUpperCase() === nombre)
   if (repetido) {
-    imeiForm.value.color = nombre
+    if (catalogoRapidoDestino.value === 'editar') editarImeiForm.value.color = nombre
+    else imeiForm.value.color = nombre
     colorRapidoVisible.value = false
     toast.add({ severity: 'info', summary: 'Color seleccionado', detail: `${nombre} ya estaba registrado`, life: 2500 })
     return
@@ -181,7 +187,8 @@ async function guardarColorRapido() {
     toast.add({ severity: 'error', summary: 'Error', detail: result.error || 'No se pudo crear el color', life: 4000 })
     return
   }
-  imeiForm.value.color = nombre
+  if (catalogoRapidoDestino.value === 'editar') editarImeiForm.value.color = nombre
+  else imeiForm.value.color = nombre
   colorRapidoVisible.value = false
   toast.add({ severity: 'success', summary: 'Color creado', detail: `${nombre} fue creado y seleccionado`, life: 2500 })
 }
@@ -1144,7 +1151,7 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
             class="flip-card phone-card min-w-0 perspective-[1000px]"
           >
             <div
-              class="flip-inner phone-card-inner relative overflow-hidden transition-transform duration-500 cursor-pointer"
+              class="flip-inner phone-card-inner relative transition-transform duration-500 cursor-pointer"
               :class="flippedTelId === tel.id ? '[transform:rotateY(180deg)]' : ''"
               style="transform-style: preserve-3d;"
             >
@@ -1384,29 +1391,36 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
 
     <Dialog v-model:visible="editarImeiVisible" header="Editar IMEI" modal :style="{ width: 'min(42rem, 96vw)' }" :closable="!guardandoEdicionImei">
       <div class="flex flex-col gap-4 pt-1">
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">IMEI</label>
+          <InputText v-model="editarImeiForm.nombre" inputmode="numeric" maxlength="15" placeholder="15 digitos" fluid />
+        </div>
+
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
-            <label class="font-semibold text-sm">IMEI</label>
-            <InputText v-model="editarImeiForm.nombre" inputmode="numeric" maxlength="15" placeholder="15 digitos" fluid />
+            <label class="font-semibold text-sm">Color</label>
+            <div class="flex items-center gap-2 min-w-0">
+              <ColorSelect v-model="editarImeiForm.color" class="flex-1 min-w-0" />
+              <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear color" @click="abrirColorRapido('editar')" v-tooltip="'Crear color'" />
+            </div>
+          </div>
+          <div class="flex flex-col gap-1">
+            <label class="font-semibold text-sm">Capacidad</label>
+            <div class="flex items-center gap-2 min-w-0">
+              <CapacitySelect v-model="editarImeiForm.capacidad" class="flex-1 min-w-0" />
+              <Button icon="pi pi-plus" severity="info" outlined class="shrink-0" aria-label="Crear capacidad" @click="abrirCapacidadRapida('editar')" v-tooltip="'Crear capacidad'" />
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="flex flex-col gap-1">
+            <label class="font-semibold text-sm">Bateria</label>
+            <InputText v-model="editarImeiForm.bateria" placeholder="Condicion o capacidad" fluid />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Estado</label>
             <Select v-model="editarImeiForm.estado" :options="estadosImei" optionLabel="label" optionValue="value" fluid />
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div class="flex flex-col gap-1">
-            <label class="font-semibold text-sm">Capacidad</label>
-            <CapacitySelect v-model="editarImeiForm.capacidad" />
-          </div>
-          <div class="flex flex-col gap-1">
-            <label class="font-semibold text-sm">Color</label>
-            <ColorSelect v-model="editarImeiForm.color" />
-          </div>
-          <div class="flex flex-col gap-1">
-            <label class="font-semibold text-sm">Bateria</label>
-            <InputText v-model="editarImeiForm.bateria" placeholder="Condicion o capacidad" fluid />
           </div>
         </div>
 
@@ -1454,7 +1468,7 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
         </div>
         <div v-if="eliminarImeiOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
           <p class="text-xs text-surface-500 text-center">Consulta el codigo de 4 digitos en el Centro OTP: {{ eliminarImeiOtpEmail || 'Configuracion > OTP Local' }}.</p>
-          <InputOtp v-model="eliminarImeiOtp" :length="4" integerOnly />
+          <InputOtp v-model="eliminarImeiOtp" :length="4" integerOnly mask />
         </div>
         <p v-if="eliminarImeiError" class="text-red-500 text-xs text-center">{{ eliminarImeiError }}</p>
       </div>

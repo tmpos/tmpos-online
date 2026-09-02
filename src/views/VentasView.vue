@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { shallowRef, computed, onMounted } from 'vue'
+import { shallowRef, computed, onMounted, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
 import { useAuthStore } from '@/stores/auth.store'
-import FacturasComp from '@/components/ventas/FacturasComp.vue'
-import CotizacionesComp from '@/components/ventas/CotizacionesComp.vue'
-import ApartadosComp from '@/components/ventas/ApartadosComp.vue'
-import RecibidosComp from '@/components/ventas/RecibidosComp.vue'
-import NotasCreditoComp from '@/components/ventas/NotasCreditoComp.vue'
-import NotasAdminComp from '@/components/ventas/NotasAdminComp.vue'
-import ReclamacionesComp from '@/components/ReclamacionesComp.vue'
 import { useSystemModeStore } from '@/stores/systemMode'
+
+const FacturasComp = defineAsyncComponent(() => import('@/components/ventas/FacturasComp.vue'))
+const CotizacionesComp = defineAsyncComponent(() => import('@/components/ventas/CotizacionesComp.vue'))
+const ApartadosComp = defineAsyncComponent(() => import('@/components/ventas/ApartadosComp.vue'))
+const RecibidosComp = defineAsyncComponent(() => import('@/components/ventas/RecibidosComp.vue'))
+const NotasCreditoComp = defineAsyncComponent(() => import('@/components/ventas/NotasCreditoComp.vue'))
+const NotasAdminComp = defineAsyncComponent(() => import('@/components/ventas/NotasAdminComp.vue'))
+const ReclamacionesComp = defineAsyncComponent(() => import('@/components/ReclamacionesComp.vue'))
 
 const auth = useAuthStore()
 const route = useRoute()

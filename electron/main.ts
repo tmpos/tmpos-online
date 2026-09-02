@@ -16,6 +16,7 @@ import Database from 'better-sqlite3'
 import { getMachineId, getMachineIdLegacy } from './machine-id'
 import { assertAvailableInventory, assertSameWarehouse } from '../src/domain/inventoryRules'
 import { isVersionNewer } from '../src/domain/versioning'
+import { isCollectablePendingInvoice } from '../src/domain/pendingInvoiceRules'
 
 // En desarrollo, Electron puede sobrevivir a la terminal que lo inicio. Si esa
 // terminal cierra su tuberia, cualquier console.log posterior emite EPIPE y,
@@ -181,21 +182,29 @@ async function onlineCloudRequest(pathname: string, init: RequestInit = {}): Pro
   if (!cloud) throw new Error('TM Cloud no esta configurado. Configuralo para usar el sistema.')
   const maxAttempts = 4
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetch(`${cloud.baseUrl}${pathname}`, {
-      ...init,
-      headers: { Authorization: `Bearer ${cloud.key}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) },
-      signal: AbortSignal.timeout(45000),
-    })
+    let response: Response
+    try {
+      response = await fetch(`${cloud.baseUrl}${pathname}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${cloud.key}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}) },
+        signal: AbortSignal.timeout(45000),
+      })
+    } catch (error) {
+      if (attempt >= maxAttempts - 1) throw error
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+      continue
+    }
     const value = await response.json().catch(() => ({}))
     if (response.ok) return value
     const message = String(value?.error?.message || value?.error || value?.message || `TM Cloud respondio HTTP ${response.status}`)
     const databaseBusy = /database\s+is\s+locked|sqlstate\[hy000\].*(?:error:\s*5|database\s+is\s+locked)|sqlite_busy/i.test(message)
     const rateLimited = response.status === 429
-    if ((databaseBusy || rateLimited) && attempt < maxAttempts - 1) {
+    const transientHttpError = response.status === 408 || response.status === 425 || response.status >= 500
+    if ((databaseBusy || rateLimited || transientHttpError) && attempt < maxAttempts - 1) {
       const retryAfter = Number(response.headers.get('retry-after') || 0)
       const delay = rateLimited
         ? (retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1))
-        : 400 * (attempt + 1)
+        : 500 * (attempt + 1)
       await new Promise(resolve => setTimeout(resolve, delay))
       continue
     }
@@ -210,15 +219,41 @@ function validOnlineTable(value: unknown): string {
   return table
 }
 
-async function fetchOnlineTable(tableValue: unknown): Promise<any[]> {
+const ONLINE_TABLE_CACHE_TTL_MS = 5000
+const ONLINE_TABLE_PAGE_SIZE = 100
+const onlineTableLastGoodRows = new Map<string, { rows: any[]; fetchedAt: number }>()
+const onlineTableFetches = new Map<string, Promise<any[]>>()
+const onlineTableVersions = new Map<string, number>()
+
+function invalidateOnlineTable(tableValue: unknown): void {
   const table = validOnlineTable(tableValue)
-  const rows: any[] = []
-  for (let page = 1; ; page++) {
-    const value = await onlineCloudRequest(`/${encodeURIComponent(table)}?page=${page}&limit=500`)
-    const batch = Array.isArray(value?.data) ? value.data : []
-    rows.push(...batch)
-    const pages = Number(value?.meta?.pages || 0)
-    if ((pages && page >= pages) || (!pages && batch.length < 500)) break
+  onlineTableLastGoodRows.delete(table)
+  onlineTableFetches.delete(table)
+  onlineTableVersions.set(table, (onlineTableVersions.get(table) || 0) + 1)
+}
+
+async function fetchOnlineTableFromApi(table: string): Promise<any[]> {
+  const first = await onlineCloudRequest(`/${encodeURIComponent(table)}?all=1&limit=${ONLINE_TABLE_PAGE_SIZE}&page=1`)
+  if (!Array.isArray(first?.data)) throw new Error(`TM Cloud devolvio una respuesta invalida para ${table}`)
+
+  let rows: any[]
+  if (first?.meta?.mode === 'all') {
+    rows = first.data
+  } else {
+    // Servidores anteriores ignoran `all=1`. La primera respuesta ya es la
+    // pagina 1; continuar desde la pagina 2 evita repetir u omitir registros.
+    rows = [...first.data]
+    for (let page = 2; ; page++) {
+      const firstPages = Number(first?.meta?.pages || 0)
+      if ((firstPages && firstPages < page) || (!firstPages && page === 2 && first.data.length < ONLINE_TABLE_PAGE_SIZE)) break
+
+      const value = await onlineCloudRequest(`/${encodeURIComponent(table)}?page=${page}&limit=${ONLINE_TABLE_PAGE_SIZE}`)
+      if (!Array.isArray(value?.data)) throw new Error(`TM Cloud devolvio una respuesta invalida para ${table}`)
+      const batch = value.data
+      rows.push(...batch)
+      const pages = Number(value?.meta?.pages || 0)
+      if ((pages && page >= pages) || (!pages && batch.length < ONLINE_TABLE_PAGE_SIZE)) break
+    }
   }
   if (ONLINE_IMAGE_TABLES.has(table) && rows.length) {
     let imageRows: any[] = []
@@ -238,6 +273,46 @@ async function fetchOnlineTable(tableValue: unknown): Promise<any[]> {
     }))
   }
   return rows
+}
+
+async function fetchOnlineTable(tableValue: unknown): Promise<any[]> {
+  const table = validOnlineTable(tableValue)
+  const cached = onlineTableLastGoodRows.get(table)
+  if (cached && Date.now() - cached.fetchedAt < ONLINE_TABLE_CACHE_TTL_MS) return cached.rows
+
+  const pending = onlineTableFetches.get(table)
+  if (pending) return pending
+
+  const previous = cached?.rows
+  const version = onlineTableVersions.get(table) || 0
+  const request = (async () => {
+    try {
+      let rows = await fetchOnlineTableFromApi(table)
+      // Una tabla que tenia datos no debe desaparecer por una respuesta vacia
+      // aislada del proxy/API. Confirmamos con una segunda consulta real.
+      if (rows.length === 0 && previous?.length) {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        rows = await fetchOnlineTableFromApi(table)
+      }
+      // Una mutacion puede terminar mientras esta lectura sigue en vuelo. No
+      // permitir que esa respuesta anterior repueble la cache invalidada.
+      if ((onlineTableVersions.get(table) || 0) === version) {
+        onlineTableLastGoodRows.set(table, { rows, fetchedAt: Date.now() })
+      }
+      return rows
+    } catch (error) {
+      if (previous) {
+        console.warn(`[TM Cloud] Se conserva la ultima lectura valida de ${table}:`, error)
+        return previous
+      }
+      throw error
+    }
+  })().finally(() => {
+    if (onlineTableFetches.get(table) === request) onlineTableFetches.delete(table)
+  })
+
+  onlineTableFetches.set(table, request)
+  return request
 }
 
 const ONLINE_IMAGE_METADATA_TABLE = 'datos_config'
@@ -310,6 +385,31 @@ function filterOnlineRows(rows: any[], whereValue: unknown, params: any[] = []):
 }
 
 const ONLINE_SCHEMA_EXCLUDED_COLUMNS = new Set(['id', 'almacen_id', 'sync_status', 'last_synced_at', '_rowid'])
+const ONLINE_SCHEMA_CACHE_TTL_MS = 30000
+let onlineSchemaCache: { data: Record<string, any>; fetchedAt: number } | null = null
+let onlineSchemaFetch: Promise<Record<string, any>> | null = null
+
+async function fetchOnlineSchema(force = false): Promise<Record<string, any>> {
+  if (!force && onlineSchemaCache && Date.now() - onlineSchemaCache.fetchedAt < ONLINE_SCHEMA_CACHE_TTL_MS) {
+    return onlineSchemaCache.data
+  }
+  if (!force && onlineSchemaFetch) return onlineSchemaFetch
+
+  const request = onlineCloudRequest('/schema').then(response => {
+    const data = response?.data && typeof response.data === 'object' ? response.data : {}
+    if (Object.keys(data).length === 0 && onlineSchemaCache && Object.keys(onlineSchemaCache.data).length > 0) {
+      return onlineSchemaCache.data
+    }
+    onlineSchemaCache = { data, fetchedAt: Date.now() }
+    return data
+  })
+  if (!force) onlineSchemaFetch = request
+  try {
+    return await request
+  } finally {
+    if (!force && onlineSchemaFetch === request) onlineSchemaFetch = null
+  }
+}
 
 function onlineCloudColumnType(value: unknown): string {
   const type = String(value || 'TEXT').toUpperCase()
@@ -348,8 +448,7 @@ async function ensureOnlineCloudTable(tableValue: unknown, sample: Record<string
   if (!desired.has('created_at')) desired.set('created_at', { name: 'created_at', type: 'DATETIME' })
   if (!desired.has('updated_at')) desired.set('updated_at', { name: 'updated_at', type: 'DATETIME' })
 
-  const schemaResponse = await onlineCloudRequest('/schema')
-  const schema = schemaResponse?.data && typeof schemaResponse.data === 'object' ? schemaResponse.data : {}
+  const schema = await fetchOnlineSchema()
   const current = schema[table]
   const currentColumns = new Set((current?.columns || []).map((column: any) => String(column.name || '').toLowerCase()))
   if (current && [...desired.keys()].every(name => currentColumns.has(name))) return
@@ -359,8 +458,7 @@ async function ensureOnlineCloudTable(tableValue: unknown, sample: Record<string
     body: JSON.stringify({ tables: [{ name: table, columns: [...desired.values()] }] }),
   })
 
-  const refreshedResponse = await onlineCloudRequest('/schema')
-  const refreshed = refreshedResponse?.data?.[table]
+  const refreshed = (await fetchOnlineSchema(true))[table]
   const refreshedColumns = new Set((refreshed?.columns || []).map((column: any) => String(column.name || '').toLowerCase()))
   const missing = [...desired.keys()].filter(name => !refreshedColumns.has(name))
   if (!refreshed || missing.length) {
@@ -393,6 +491,7 @@ async function handleOnlineDbAction(action: string, data: Record<string, any>): 
     const value = await onlineCloudRequest(`/${encodeURIComponent(table)}`, { method: 'POST', body: JSON.stringify(record) })
     const created = value?.data || value
     if (ONLINE_IMAGE_TABLES.has(table) && image) await saveOnlineImage(table, created?.uid || record.uid || created?.id, image)
+    invalidateOnlineTable(table)
     return { success: true, data: { ...created, ...(image ? { imagen: image } : {}) } }
   }
   if (action === 'db/update' || action === 'db/delete') {
@@ -423,6 +522,7 @@ async function handleOnlineDbAction(action: string, data: Record<string, any>): 
       }
       await onlineCloudRequest(`/${encodeURIComponent(table)}/${encodeURIComponent(key)}`, { method: 'DELETE' })
       if (ONLINE_IMAGE_TABLES.has(table)) await saveOnlineImage(table, row.uid || row.id, '')
+      invalidateOnlineTable(table)
       return { success: true, changes: 1, data: { cuentas_cobrar_eliminadas: cuentasCobrarEliminadas } }
     } else {
       const record = { ...(data.data || {}) }
@@ -437,6 +537,7 @@ async function handleOnlineDbAction(action: string, data: Record<string, any>): 
         await onlineCloudRequest(`/${encodeURIComponent(table)}/${encodeURIComponent(key)}`, { method: 'PUT', body: JSON.stringify(record) })
       }
       if (ONLINE_IMAGE_TABLES.has(table) && hasImage) await saveOnlineImage(table, row.uid || row.id, image)
+      invalidateOnlineTable(table)
     }
     return { success: true, changes: 1 }
   }
@@ -452,9 +553,10 @@ async function callOnlineRuntime(action: string, data: Record<string, any>): Pro
     try {
       const almacenUid = String(data?.args?.[0] || '')
       const rows = await fetchOnlineTable('caja_turnos')
+      const empresaCount = Number((db!.prepare(`SELECT COUNT(*) AS total FROM empresa`).get() as any)?.total || 0)
       const row = rows.find(item =>
         String(item.estado || '').toLowerCase() === 'abierto' &&
-        (!almacenUid || String(item.almacen_uid || '') === almacenUid),
+        (!almacenUid || String(item.almacen_uid || '') === almacenUid || (!item.almacen_uid && !Number(item.almacen_id) && empresaCount <= 1)),
       ) || null
       return { success: true, data: row }
     } catch (error: any) {
@@ -1022,8 +1124,8 @@ function initDatabase(): void {
       const columns = tableColumns('gastos')
       if (!columns.includes('id')) {
         db!.exec(`ALTER TABLE gastos RENAME TO gastos_old`)
-        db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',banco_id INTEGER DEFAULT 0,banco_uid TEXT DEFAULT '',banco_nombre TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
-        const copyColumns = ['cantidad', 'fecha', 'hora', 'comentario', 'metodo_pago', 'banco_id', 'banco_uid', 'banco_nombre', 'turno_id', 'created_at', 'updated_at'].filter(c => columns.includes(c))
+        db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',efectivo REAL DEFAULT 0,transferencia REAL DEFAULT 0,banco_id INTEGER DEFAULT 0,banco_uid TEXT DEFAULT '',banco_nombre TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        const copyColumns = ['cantidad', 'fecha', 'hora', 'comentario', 'metodo_pago', 'efectivo', 'transferencia', 'banco_id', 'banco_uid', 'banco_nombre', 'turno_id', 'created_at', 'updated_at'].filter(c => columns.includes(c))
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
           db!.exec(`INSERT INTO gastos (${columnsSql}) SELECT ${columnsSql} FROM gastos_old`)
@@ -1035,13 +1137,15 @@ function initDatabase(): void {
         if (!columns.includes(column)) db!.exec(`ALTER TABLE gastos ADD COLUMN "${column}" TEXT DEFAULT ''`)
       }
       if (!columns.includes('metodo_pago')) db!.exec(`ALTER TABLE gastos ADD COLUMN metodo_pago TEXT DEFAULT 'EFECTIVO'`)
+      if (!columns.includes('efectivo')) db!.exec(`ALTER TABLE gastos ADD COLUMN efectivo REAL DEFAULT 0`)
+      if (!columns.includes('transferencia')) db!.exec(`ALTER TABLE gastos ADD COLUMN transferencia REAL DEFAULT 0`)
       if (!columns.includes('banco_id')) db!.exec(`ALTER TABLE gastos ADD COLUMN banco_id INTEGER DEFAULT 0`)
       if (!columns.includes('banco_uid')) db!.exec(`ALTER TABLE gastos ADD COLUMN banco_uid TEXT DEFAULT ''`)
       if (!columns.includes('banco_nombre')) db!.exec(`ALTER TABLE gastos ADD COLUMN banco_nombre TEXT DEFAULT ''`)
       if (!columns.includes('turno_id')) db!.exec(`ALTER TABLE gastos ADD COLUMN turno_id INTEGER DEFAULT 0`)
       return
     }
-    db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',banco_id INTEGER DEFAULT 0,banco_uid TEXT DEFAULT '',banco_nombre TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE gastos (id INTEGER PRIMARY KEY AUTOINCREMENT,cantidad REAL DEFAULT 0,fecha TEXT DEFAULT '',hora TEXT DEFAULT '',comentario TEXT DEFAULT '',metodo_pago TEXT DEFAULT 'EFECTIVO',efectivo REAL DEFAULT 0,transferencia REAL DEFAULT 0,banco_id INTEGER DEFAULT 0,banco_uid TEXT DEFAULT '',banco_nombre TEXT DEFAULT '',turno_id INTEGER DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
   function ensureFacturasTable(): void {
@@ -1824,7 +1928,7 @@ function setupIpcHandlers(): void {
       if (!facturaId || !turnoId) throw new Error('Factura o turno inválido')
       const factura = db!.prepare(`SELECT * FROM facturas WHERE id = ?`).get(facturaId) as any
       if (!factura) throw new Error('La factura no existe')
-      if (String(factura.estado_factura || '').toUpperCase() !== 'PENDIENTE') throw new Error('La factura ya no está pendiente')
+      if (!isCollectablePendingInvoice(factura)) throw new Error('El documento no es una factura de venta pendiente cobrable')
       const turno = db!.prepare(`SELECT * FROM caja_turnos WHERE id = ? AND estado = 'abierto'`).get(turnoId) as any
       if (!turno) throw new Error('El turno de caja no está abierto')
       if (factura.almacen_uid && turno.almacen_uid && String(factura.almacen_uid) !== String(turno.almacen_uid)) throw new Error('La factura pertenece a otro almacén')
@@ -1961,7 +2065,12 @@ function setupIpcHandlers(): void {
       const priceFields = ['precio_venta', 'precio_min', 'precio_xmayor', 'costo']
       if (priceFields.some(field => data[field] !== undefined) && !usuarioPuedeAccion(usuario || '', 'accion_precios')) return { success: false, error: 'No tienes permiso para modificar precios o costos' }
       const oldData = db!.prepare(`SELECT * FROM "${tabla}" WHERE id = ?`).get(id) as Record<string, any> || {}
-      if (tabla === 'empresa') data.almacen_uid = data.uid || oldData.uid || oldData.almacen_uid || ''
+      if (tabla === 'empresa') {
+        // El uid identifica a la empresa en TM Cloud. Una edicion puede cambiar
+        // cualquier dato comercial, pero nunca debe convertirla en otra entidad.
+        data.uid = oldData.uid || data.uid || generarUid()
+        data.almacen_uid = data.uid
+      }
       if (tabla !== 'empresa' && data.almacen_uid) {
         const emp = db!.prepare(`SELECT id FROM empresa WHERE uid = ? LIMIT 1`).get(data.almacen_uid) as any
         if (emp?.id) data.almacen_id = emp.id
@@ -2006,11 +2115,14 @@ function setupIpcHandlers(): void {
       const id = Number(payload?.id || 0)
       const cantidad = Number(payload?.cantidad || 0)
       const metodoPago = String(payload?.metodo_pago || 'EFECTIVO').trim().toUpperCase()
+      const efectivo = metodoPago === 'EFECTIVO' ? cantidad : Math.max(0, Number(payload?.efectivo || 0))
+      const transferencia = metodoPago === 'TRANSFERENCIA' ? cantidad : Math.max(0, Number(payload?.transferencia || 0))
       const bancoId = Number(payload?.banco_id || 0)
       const bancoUid = String(payload?.banco_uid || '').trim()
       if (!(cantidad > 0)) return { success: false, error: 'El monto del gasto debe ser mayor que cero' }
-      if (!['EFECTIVO', 'TRANSFERENCIA'].includes(metodoPago)) return { success: false, error: 'Metodo de pago no valido' }
-      if (metodoPago === 'TRANSFERENCIA' && !bancoId && !bancoUid) return { success: false, error: 'Selecciona el banco de la transferencia' }
+      if (!['EFECTIVO', 'TRANSFERENCIA', 'MIXTO'].includes(metodoPago)) return { success: false, error: 'Metodo de pago no valido' }
+      if (metodoPago === 'MIXTO' && (!(efectivo > 0) || !(transferencia > 0) || Math.abs((efectivo + transferencia) - cantidad) >= 0.01)) return { success: false, error: 'La suma de efectivo y transferencia debe coincidir con el monto del gasto' }
+      if (transferencia > 0 && !bancoId && !bancoUid) return { success: false, error: 'Selecciona el banco de la transferencia' }
 
       const guardar = db!.transaction(() => {
         const now = new Date().toISOString()
@@ -2025,22 +2137,25 @@ function setupIpcHandlers(): void {
 
         // Al editar, primero se revierte el retiro bancario anterior dentro de
         // la misma transaccion para que el saldo nunca quede duplicado.
-        if (anterior && String(anterior.metodo_pago || '').toUpperCase() === 'TRANSFERENCIA') {
+        const transferenciaAnterior = String(anterior?.metodo_pago || '').toUpperCase() === 'TRANSFERENCIA'
+          ? Number(anterior?.transferencia || anterior?.cantidad || 0)
+          : String(anterior?.metodo_pago || '').toUpperCase() === 'MIXTO' ? Number(anterior?.transferencia || 0) : 0
+        if (anterior && transferenciaAnterior > 0) {
           const bancoAnterior = buscarBanco(String(anterior.banco_uid || ''), Number(anterior.banco_id || 0))
           if (!bancoAnterior) throw new Error('No se encontro el banco asociado al gasto anterior')
-          const saldoRestaurado = Number(bancoAnterior.saldo || 0) + Number(anterior.cantidad || 0)
+          const saldoRestaurado = Number(bancoAnterior.saldo || 0) + transferenciaAnterior
           db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoRestaurado, now, now, bancoAnterior.id)
           registrarTransaccionBanco(bancoAnterior, Number(bancoAnterior.saldo || 0), saldoRestaurado, 'Reversion de gasto editado', String(payload?.usuario || ''), 'GASTO', id, String(anterior.comentario || ''))
           registrarBitacora('bancos', Number(bancoAnterior.id), 'UPDATE', String(payload?.usuario || ''), { saldo: saldoRestaurado }, bancoAnterior)
         }
 
         let banco: any = null
-        if (metodoPago === 'TRANSFERENCIA') {
+        if (transferencia > 0) {
           banco = buscarBanco(bancoUid, bancoId)
           if (!banco) throw new Error('No se encontro el banco seleccionado')
           const saldoActual = Number((db!.prepare(`SELECT saldo FROM bancos WHERE id = ?`).get(banco.id) as any)?.saldo || 0)
-          if (saldoActual < cantidad) throw new Error(`Fondos insuficientes en ${banco.nombre}. Saldo disponible: RD$ ${saldoActual.toFixed(2)}`)
-          const saldoNuevo = saldoActual - cantidad
+          if (saldoActual < transferencia) throw new Error(`Fondos insuficientes en ${banco.nombre}. Saldo disponible: RD$ ${saldoActual.toFixed(2)}`)
+          const saldoNuevo = saldoActual - transferencia
           db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoNuevo, now, now, banco.id)
           registrarTransaccionBanco(banco, saldoActual, saldoNuevo, 'Gasto por transferencia', String(payload?.usuario || ''), 'GASTO', id, String(payload?.comentario || ''))
           registrarBitacora('bancos', Number(banco.id), 'UPDATE', String(payload?.usuario || ''), { saldo: saldoNuevo }, { ...banco, saldo: saldoActual })
@@ -2052,6 +2167,8 @@ function setupIpcHandlers(): void {
           hora: String(payload?.hora || ''),
           comentario: String(payload?.comentario || '').trim(),
           metodo_pago: metodoPago,
+          efectivo,
+          transferencia,
           banco_id: banco ? Number(banco.id) : 0,
           banco_uid: banco ? String(banco.uid || '') : '',
           banco_nombre: banco ? String(banco.nombre || '') : '',
@@ -2088,12 +2205,14 @@ function setupIpcHandlers(): void {
       const eliminar = db!.transaction(() => {
         const gasto = db!.prepare(`SELECT * FROM gastos WHERE id = ?`).get(Number(id || 0)) as any
         if (!gasto) throw new Error('El gasto no existe')
-        if (String(gasto.metodo_pago || '').toUpperCase() === 'TRANSFERENCIA') {
+        const metodoPago = String(gasto.metodo_pago || '').toUpperCase()
+        const transferencia = metodoPago === 'TRANSFERENCIA' ? Number(gasto.transferencia || gasto.cantidad || 0) : metodoPago === 'MIXTO' ? Number(gasto.transferencia || 0) : 0
+        if (transferencia > 0) {
           const banco = gasto.banco_uid
             ? db!.prepare(`SELECT * FROM bancos WHERE uid = ? LIMIT 1`).get(gasto.banco_uid) as any
             : db!.prepare(`SELECT * FROM bancos WHERE id = ? LIMIT 1`).get(Number(gasto.banco_id || 0)) as any
           if (!banco) throw new Error('No se encontro el banco asociado al gasto')
-          const saldoNuevo = Number(banco.saldo || 0) + Number(gasto.cantidad || 0)
+          const saldoNuevo = Number(banco.saldo || 0) + transferencia
           const now = new Date().toISOString()
           db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoNuevo, now, now, banco.id)
           registrarTransaccionBanco(banco, Number(banco.saldo || 0), saldoNuevo, 'Reversion de gasto eliminado', usuario || '', 'GASTO', Number(gasto.id || 0), String(gasto.comentario || ''))
@@ -2193,14 +2312,18 @@ function setupIpcHandlers(): void {
           }
         }
 
-        // Cualquier eliminacion de un gasto por transferencia debe devolver
-        // el dinero al banco, incluso si proviene de una vista antigua.
-        if (tabla === 'gastos' && String(oldData?.metodo_pago || '').toUpperCase() === 'TRANSFERENCIA') {
+        // Cualquier eliminacion de un gasto con transferencia debe devolver
+        // al banco solamente la parte que salio de esa cuenta.
+        const metodoGasto = String(oldData?.metodo_pago || '').toUpperCase()
+        const transferenciaGasto = metodoGasto === 'TRANSFERENCIA'
+          ? Number(oldData?.transferencia || oldData?.cantidad || 0)
+          : metodoGasto === 'MIXTO' ? Number(oldData?.transferencia || 0) : 0
+        if (tabla === 'gastos' && transferenciaGasto > 0) {
           const banco = oldData?.banco_uid
             ? db!.prepare(`SELECT * FROM bancos WHERE uid = ? LIMIT 1`).get(oldData.banco_uid) as any
             : db!.prepare(`SELECT * FROM bancos WHERE id = ? LIMIT 1`).get(Number(oldData?.banco_id || 0)) as any
           if (!banco) throw new Error('No se encontro el banco asociado al gasto')
-          const saldoNuevo = Number(banco.saldo || 0) + Number(oldData.cantidad || 0)
+          const saldoNuevo = Number(banco.saldo || 0) + transferenciaGasto
           const now = new Date().toISOString()
           db!.prepare(`UPDATE bancos SET saldo = ?, fecha_transaccion = ?, updated_at = ? WHERE id = ?`).run(saldoNuevo, now, now, banco.id)
           registrarTransaccionBanco(banco, Number(banco.saldo || 0), saldoNuevo, 'Reversion de gasto eliminado', usuario || '', 'GASTO', Number(oldData.id || 0), String(oldData.comentario || ''))
@@ -5814,6 +5937,10 @@ async function startLocalServer() {
             result = { success: true, data: { id: newId } }
           } else if (action === 'db/update') {
             const oldData = db!.prepare(`SELECT * FROM "${body.tabla}" WHERE id = ?`).get(body.id) as Record<string, any> || {}
+            if (body.tabla === 'empresa') {
+              body.data.uid = oldData.uid || body.data.uid || generarUid()
+              body.data.almacen_uid = body.data.uid
+            }
             body.data.updated_at = new Date().toISOString()
             const keys = Object.keys(body.data); const sets = keys.map(k => `"${k}" = ?`).join(', ')
             db!.prepare(`UPDATE "${body.tabla}" SET ${sets} WHERE id = ?`).run(...Object.values(body.data), body.id)

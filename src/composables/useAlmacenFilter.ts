@@ -16,9 +16,15 @@ export function useAlmacenFilter() {
     const id = store.activeId || 0
     const uid = store.activeUid || ''
     if (!uid && !id) return items
-    return items.filter(item => item.almacen_uid
-      ? String(item.almacen_uid) === uid
-      : Number(item.almacen_id) === id || (!item.almacen_id && id === 1))
+    return items.filter(item => {
+      const itemUid = String(item.almacen_uid || '')
+      const itemId = Number(item.almacen_id || 0)
+      if (itemUid) return itemUid === uid
+      if (itemId) return itemId === id
+      // Compatibilidad con datos creados antes de almacen_uid. Si solo existe
+      // una empresa, los registros sin asignacion pertenecen a ese almacen.
+      return store.almacenes.length <= 1
+    })
   }
 
   function addAlmacenId(data: Record<string, any>) {

@@ -34,6 +34,7 @@ const checking = ref(false)
 const lastError = ref('')
 let healthTimer: ReturnType<typeof setInterval> | null = null
 let localElectronBridge: any = null
+let cloudInvalidationListenerInstalled = false
 
 type CloudColumnDefinition = {
   name: string
@@ -46,12 +47,25 @@ type CloudColumnDefinition = {
 type CloudTableSchema = { columns: Array<{ name: string }> }
 
 const CLOUD_SCHEMA_CACHE_TTL_MS = 15000
+// Las lecturas completas se reutilizan por unos segundos. Las mutaciones y los
+// eventos de sincronizacion invalidan la tabla inmediatamente, de modo que no
+// se pierde ningun cambio y varias vistas pueden compartir la misma descarga.
+const CLOUD_DATA_CACHE_TTL_MS = 5000
 const cloudSchemaChecks = new Map<string, Promise<void>>()
 let cloudSchemaCache: { tables: Record<string, CloudTableSchema>; fetchedAt: number } | null = null
 let cloudSchemaFetch: Promise<Record<string, CloudTableSchema>> | null = null
-const CLOUD_DATA_CACHE_TTL_MS = 5000
 const cloudDataCache = new Map<string, { rows: any[]; fetchedAt: number }>()
 const cloudDataFetches = new Map<string, Promise<any[]>>()
+type CloudDataBatchEntry = {
+  resolve: (rows: any[]) => void
+  reject: (error: unknown) => void
+}
+type CloudTableLoad =
+  | { status: 'fulfilled'; rows: any[] }
+  | { status: 'rejected'; reason: unknown }
+const cloudDataBatch = new Map<string, CloudDataBatchEntry>()
+let cloudDataBatchScheduled = false
+let cloudSnapshotUnsupported = false
 const CLOUD_EXCLUDED_LOCAL_COLUMNS = new Set(['id', 'almacen_id', 'sync_status', 'last_synced_at', '_rowid'])
 const CLOUD_FALLBACK_SCHEMAS: Record<string, CloudColumnDefinition[]> = {
   capacidades: [
@@ -139,16 +153,25 @@ async function cloudRequest(path: string, init: RequestInit = {}, write = false)
       // fetch solo rechaza por un problema real de red. Los errores HTTP y de
       // contenido pertenecen a la operacion solicitada y no deben declarar toda
       // la aplicacion sin conexion.
-      markOffline(error)
-      throw error
+      if (attempt >= 3) {
+        markOffline(error)
+        throw error
+      }
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+      continue
     }
     markOnline()
-    if (response.status !== 429 || attempt === 3) break
+    const retryable = response.status === 408 || response.status === 425 || response.status === 429 || (response.status >= 500 && response.status !== 501)
+    if (!retryable || attempt === 3) break
     const retryAfter = Number(response.headers.get('retry-after') || 0)
-    await new Promise(resolve => setTimeout(resolve, retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1)))
+    await new Promise(resolve => setTimeout(resolve, retryAfter > 0 ? retryAfter * 1000 : 500 * (attempt + 1)))
   }
   if (!response) throw new Error('TM Cloud no respondio')
-  if (!response.ok) throw new Error(await tmCloud.responseError(response))
+  if (!response.ok) {
+    const error = new Error(await tmCloud.responseError(response)) as Error & { status?: number }
+    error.status = response.status
+    throw error
+  }
   return await response.json().catch(() => ({}))
 }
 
@@ -194,6 +217,9 @@ async function fetchCloudSchema(force = false): Promise<Record<string, CloudTabl
 
   const request = cloudRequest('/schema').then(response => {
     const tables = response?.data && typeof response.data === 'object' ? response.data : {}
+    if (Object.keys(tables).length === 0 && cloudSchemaCache && Object.keys(cloudSchemaCache.tables).length > 0) {
+      return cloudSchemaCache.tables
+    }
     cloudSchemaCache = { tables, fetchedAt: Date.now() }
     return tables
   })
@@ -254,44 +280,150 @@ export async function ensureOnlineTable(tablaValue: string, data: Record<string,
   return check
 }
 
-async function fetchAllUncached(tabla: string): Promise<any[]> {
+async function fetchTableRowsIndividual(tabla: string): Promise<any[]> {
   await ensureOnlineTable(tabla)
-  const rows: any[] = []
-  for (let page = 1; ; page++) {
-    const response = await cloudRequest(`/${encodeURIComponent(tabla)}?page=${page}&limit=500`)
-    const batch = Array.isArray(response?.data) ? response.data : []
-    rows.push(...batch)
-    const pages = Number(response?.meta?.pages || 0)
-    if ((pages && page >= pages) || (!pages && batch.length < 500)) break
-  }
-  if (ONLINE_IMAGE_TABLES.has(tabla) && rows.length) {
-    let metadata: any[] = []
-    try {
-      metadata = await fetchAll(ONLINE_IMAGE_METADATA_TABLE)
-    } catch {
-      // La metadata de imagen es opcional y nunca debe bloquear el catalogo.
-      return rows
+  let rows: any[] = []
+
+  // TMPBASE moderno entrega el snapshot completo en una sola consulta y una
+  // sola respuesta comprimible. Conservamos el recorrido paginado como
+  // compatibilidad durante despliegues donde el servidor aun no se actualizo.
+  const snapshot = await cloudRequest(`/${encodeURIComponent(tabla)}?all=1&limit=100&page=1`)
+  if (!Array.isArray(snapshot?.data)) throw new Error(`TM Cloud devolvio una respuesta invalida para ${tabla}`)
+  if (snapshot?.meta?.mode === 'all') {
+    rows = snapshot.data
+  } else {
+    for (let page = 1; ; page++) {
+      const response = page === 1
+        ? snapshot
+        : await cloudRequest(`/${encodeURIComponent(tabla)}?page=${page}&limit=100`)
+      if (!Array.isArray(response?.data)) throw new Error(`TM Cloud devolvio una respuesta invalida para ${tabla}`)
+      const batch = response.data
+      rows.push(...batch)
+      const pages = Number(response?.meta?.pages || 0)
+      if ((pages && page >= pages) || (!pages && batch.length < 100)) break
     }
-    const images = new Map(metadata
-      .filter(row => String(row.nombre || '').startsWith(`${ONLINE_IMAGE_PREFIX}${tabla}:`))
-      .map(row => [String(row.nombre), String(row.valor || '')]))
-    return rows.map(row => ({
-      ...row,
-      imagen: images.get(onlineImageKey(tabla, row.uid || row.id)) || row.imagen || '',
-    }))
   }
   return rows
+}
+
+function hydrateOnlineImageRows(tabla: string, rows: any[], metadata: any[]): any[] {
+  if (!ONLINE_IMAGE_TABLES.has(tabla) || !rows.length) return rows
+  const images = new Map(metadata
+    .filter(row => String(row.nombre || '').startsWith(`${ONLINE_IMAGE_PREFIX}${tabla}:`))
+    .map(row => [String(row.nombre), String(row.valor || '')]))
+  return rows.map(row => ({
+    ...row,
+    imagen: images.get(onlineImageKey(tabla, row.uid || row.id)) || row.imagen || '',
+  }))
+}
+
+async function fetchTableRowsIndividualWithImages(tabla: string): Promise<any[]> {
+  const rows = await fetchTableRowsIndividual(tabla)
+  if (!ONLINE_IMAGE_TABLES.has(tabla) || !rows.length) return rows
+  try {
+    const metadata = await fetchTableRowsIndividual(ONLINE_IMAGE_METADATA_TABLE)
+    cloudDataCache.set(ONLINE_IMAGE_METADATA_TABLE, { rows: metadata, fetchedAt: Date.now() })
+    return hydrateOnlineImageRows(tabla, rows, metadata)
+  } catch {
+    // La metadata de imagen es opcional y nunca debe bloquear el catalogo.
+    return rows
+  }
+}
+
+async function fetchTablesIndividually(tables: string[]): Promise<Map<string, CloudTableLoad>> {
+  const loads = await Promise.all(tables.map(async tabla => {
+    try {
+      return [tabla, { status: 'fulfilled', rows: await fetchTableRowsIndividual(tabla) } as CloudTableLoad] as const
+    } catch (reason) {
+      return [tabla, { status: 'rejected', reason } as CloudTableLoad] as const
+    }
+  }))
+  return new Map<string, CloudTableLoad>(loads)
+}
+
+async function fetchSnapshotTables(tables: string[]): Promise<Map<string, CloudTableLoad>> {
+  await Promise.all(tables.map(tabla => ensureOnlineTable(tabla)))
+  const response = await cloudRequest('/snapshot', {
+    method: 'POST',
+    body: JSON.stringify({ tables }),
+  })
+  const data = response?.data
+  if (response?.meta?.mode !== 'snapshot' || !data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('TM Cloud devolvio un snapshot invalido')
+  }
+  const incomplete = tables.find(tabla => !Object.prototype.hasOwnProperty.call(data, tabla) || !Array.isArray(data[tabla]))
+  if (incomplete) throw new Error(`TM Cloud devolvio un snapshot incompleto; falta ${incomplete}`)
+  return new Map<string, CloudTableLoad>(tables.map(tabla => [
+    tabla,
+    { status: 'fulfilled', rows: data[tabla] },
+  ]))
+}
+
+async function flushCloudDataBatch(): Promise<void> {
+  cloudDataBatchScheduled = false
+  const entries = new Map(cloudDataBatch)
+  cloudDataBatch.clear()
+  if (!entries.size) return
+
+  const requestedTables = [...entries.keys()]
+  const tables = [...requestedTables]
+  if (requestedTables.some(tabla => ONLINE_IMAGE_TABLES.has(tabla)) && !tables.includes(ONLINE_IMAGE_METADATA_TABLE)) {
+    tables.push(ONLINE_IMAGE_METADATA_TABLE)
+  }
+
+  let loads: Map<string, CloudTableLoad>
+  if (cloudSnapshotUnsupported) {
+    loads = await fetchTablesIndividually(tables)
+  } else {
+    try {
+      loads = await fetchSnapshotTables(tables)
+    } catch (error) {
+      const status = Number((error as { status?: number })?.status || 0)
+      if ([404, 405, 501].includes(status)) cloudSnapshotUnsupported = true
+      // Un fallo parcial nunca se mezcla con el snapshot: todas las tablas se
+      // vuelven a leer individualmente para evitar entregar filas incompletas.
+      loads = await fetchTablesIndividually(tables)
+    }
+  }
+
+  const metadataLoad = loads.get(ONLINE_IMAGE_METADATA_TABLE)
+  const metadata = metadataLoad?.status === 'fulfilled' ? metadataLoad.rows : []
+  if (metadataLoad?.status === 'fulfilled' && !entries.has(ONLINE_IMAGE_METADATA_TABLE)) {
+    cloudDataCache.set(ONLINE_IMAGE_METADATA_TABLE, { rows: metadata, fetchedAt: Date.now() })
+  }
+  for (const [tabla, entry] of entries) {
+    const load = loads.get(tabla)
+    if (!load || load.status === 'rejected') {
+      entry.reject(load?.status === 'rejected' ? load.reason : new Error(`No se pudo cargar ${tabla}`))
+      continue
+    }
+    entry.resolve(hydrateOnlineImageRows(tabla, load.rows, metadata))
+  }
+}
+
+function fetchAllUncached(tabla: string): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    cloudDataBatch.set(tabla, { resolve, reject })
+    if (cloudDataBatchScheduled) return
+    cloudDataBatchScheduled = true
+    queueMicrotask(() => { void flushCloudDataBatch() })
+  })
 }
 
 async function fetchAll(tabla: string): Promise<any[]> {
   const cached = cloudDataCache.get(tabla)
   if (cached && Date.now() - cached.fetchedAt < CLOUD_DATA_CACHE_TTL_MS) return cached.rows
-
   const pending = cloudDataFetches.get(tabla)
   if (pending) return pending
 
   const request = fetchAllUncached(tabla)
-    .then(rows => {
+    .then(async rows => {
+      // Siempre consultamos la API. Si una tabla que tenia registros llega
+      // vacia una sola vez, verificamos antes de borrar la vista del usuario.
+      if (rows.length === 0 && cached?.rows.length) {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        rows = await fetchTableRowsIndividualWithImages(tabla)
+      }
       cloudDataCache.set(tabla, { rows, fetchedAt: Date.now() })
       return rows
     })
@@ -306,6 +438,11 @@ async function fetchAll(tabla: string): Promise<any[]> {
 
 function invalidateCloudData(tabla: string) {
   cloudDataCache.delete(tabla)
+}
+
+function invalidateCloudDataFromEvent(event: Event) {
+  const tabla = String((event as CustomEvent)?.detail?.table || '').trim().toLowerCase()
+  if (tabla) invalidateCloudData(tabla)
 }
 const ONLINE_IMAGE_METADATA_TABLE = 'datos_config'
 const ONLINE_IMAGE_PREFIX = '__tmpos_imagen__:'
@@ -410,6 +547,10 @@ export async function installOnlineDataService(): Promise<void> {
   const localElectron = (window as any).electron
   if (!localDb || !localElectron?.invoke) throw new Error('La capa local no esta inicializada')
   localElectronBridge = localElectron
+  if (!cloudInvalidationListenerInstalled) {
+    window.addEventListener('tmcloud:table-changed', invalidateCloudDataFromEvent)
+    cloudInvalidationListenerInstalled = true
+  }
 
   const onlineDb = {
     getAll: async (tablaValue: string): Promise<ApiResult<any[]>> => {
@@ -468,6 +609,7 @@ export async function installOnlineDataService(): Promise<void> {
         const hasImage = Object.prototype.hasOwnProperty.call(record, 'imagen')
         const image = record.imagen
         if (ONLINE_IMAGE_TABLES.has(tabla)) delete record.imagen
+        await ensureOnlineTable(tabla, record)
         if (Object.keys(record).length) {
           await cloudRequest(`/${encodeURIComponent(tabla)}/${encodeURIComponent(String(key))}`, { method: 'PUT', body: JSON.stringify(record) }, true)
         }

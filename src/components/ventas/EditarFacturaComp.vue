@@ -5,6 +5,7 @@ const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Select from 'primevue/select'
@@ -20,6 +21,9 @@ import { encryptarPassword } from '@/funciones/funciones.js'
 const router = useRouter()
 const route = useRoute()
 const toast = useToast()
+const dialogDetalleImei = ref(false)
+const imeiDetalle = ref<any>(null)
+const imeiConsultando = ref('')
 const facturaId = computed(() => Number(route.params.id) || null)
 const guardando = ref(false)
 const facturaBloqueadaFiscal = ref(false)
@@ -118,6 +122,88 @@ const productosParsed = computed(() => {
     return Array.isArray(p) ? p : []
   } catch { return [] }
 })
+
+function valoresDetalleProducto(valorPlural: any, valorSingular: any): string[] {
+  const valores = Array.isArray(valorPlural)
+    ? valorPlural
+    : typeof valorPlural === 'string' && valorPlural.includes(',')
+      ? valorPlural.split(',')
+      : valorSingular
+        ? [valorSingular]
+        : []
+  return [...new Set(valores.map(valor => String(valor || '').trim()).filter(Boolean))]
+}
+
+function detalleVariantesProducto(producto: any): string {
+  const capacidades = valoresDetalleProducto(producto?.capacidades, producto?.capacidad)
+    .map(valor => /^\d+(?:\.\d+)?$/.test(valor) ? `${valor} GB` : valor)
+  const colores = valoresDetalleProducto(producto?.colores, producto?.color)
+  return [
+    capacidades.length ? `Capacidad: ${capacidades.join(', ')}` : '',
+    colores.length ? `Color: ${colores.join(', ')}` : '',
+  ].filter(Boolean).join(' · ')
+}
+
+function detalleIdentificadorProducto(producto: any): string {
+  const imeis = valoresDetalleProducto(producto?.imeis || producto?.lista_imei, producto?.imei)
+  if (imeis.length) return `IMEI: ${imeis.join(', ')}`
+  const seriales = valoresDetalleProducto(producto?.seriales, producto?.serial)
+  return seriales.length ? `Serial: ${seriales.join(', ')}` : ''
+}
+
+function referenciasImeiProducto(producto: any): Array<{ id: number; nombre: string }> {
+  const nombres = valoresDetalleProducto(producto?.imeis || producto?.lista_imei, producto?.imei)
+  const ids = valoresDetalleProducto(producto?.imei_ids, producto?.imei_id).map(valor => Number(valor) || 0)
+  return nombres.map((nombre, index) => ({ id: ids[index] || ids[0] || 0, nombre }))
+}
+
+async function consultarDetalleImei(referencia: { id: number; nombre: string }) {
+  const clave = `${referencia.id}:${referencia.nombre}`
+  imeiConsultando.value = clave
+  try {
+    const [imeiRes, telefonosRes] = await Promise.all([
+      window.db.getAll('imei'),
+      window.db.getAll('telefonos'),
+    ])
+    if (!imeiRes.success) throw new Error(imeiRes.error || 'No se pudo consultar el IMEI')
+
+    const registro = (imeiRes.data || []).find((item: any) =>
+      (referencia.id > 0 && Number(item.id) === referencia.id) ||
+      String(item.nombre || '').trim() === referencia.nombre.trim(),
+    )
+    if (!registro) throw new Error(`El IMEI ${referencia.nombre} no existe en inventario`)
+
+    const telefono = (telefonosRes.success ? telefonosRes.data || [] : []).find((item: any) =>
+      (registro.id_equi && Number(item.id) === Number(registro.id_equi)) ||
+      (registro.telefono_uid && String(item.uid || '') === String(registro.telefono_uid)),
+    )
+    imeiDetalle.value = {
+      ...registro,
+      equipo_detalle: registro.equipo || telefono?.nombre || 'Sin equipo asignado',
+      telefono_uid_detalle: registro.telefono_uid || telefono?.uid || '',
+    }
+    dialogDetalleImei.value = true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'IMEI no disponible', detail: error?.message || 'No se pudo consultar el IMEI', life: 4000 })
+  } finally {
+    imeiConsultando.value = ''
+  }
+}
+
+function etiquetaEstadoImei(estado: any): string {
+  return String(estado || 'SIN ESTADO').trim().toUpperCase()
+}
+
+function precioProducto(producto: any): number {
+  return Number(producto?.precio ?? producto?.precio_venta ?? producto?.precio_unitario ?? 0) || 0
+}
+
+function totalProducto(producto: any): number {
+  const totalGuardado = Number(producto?.total)
+  return Number.isFinite(totalGuardado) && producto?.total !== null && producto?.total !== undefined
+    ? totalGuardado
+    : precioProducto(producto) * (Number(producto?.cantidad || 1) || 1)
+}
 
 const metodosPago = [
   { label: 'Efectivo', value: 'EFECTIVO' },
@@ -342,39 +428,39 @@ onMounted(cargarDatos)
       <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">No. Factura</label>
-        <InputText v-model="form.no_factura" placeholder="No. factura" :disabled="facturaBloqueadaFiscal" fluid />
+        <InputText v-model="form.no_factura" placeholder="No. factura" readonly fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Tipo Factura</label>
-        <Select v-model="form.tipo_factura" :options="tiposFactura" optionLabel="label" optionValue="value" :disabled="facturaBloqueadaFiscal" fluid />
+        <Select v-model="form.tipo_factura" :options="tiposFactura" optionLabel="label" optionValue="value" disabled fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Comprobante</label>
-        <InputText v-model="form.comprobante" placeholder="NCF" :disabled="facturaBloqueadaFiscal" fluid />
+        <InputText v-model="form.comprobante" placeholder="NCF" readonly fluid />
       </div>
       <div class="flex flex-col gap-1 md:col-span-3">
         <label class="font-semibold text-sm">Cliente</label>
-        <InputText v-model="form.nombre_cliente" placeholder="Nombre del cliente" :disabled="facturaBloqueadaFiscal" fluid class="uppercase" style="text-transform: uppercase;" />
+        <InputText v-model="form.nombre_cliente" placeholder="Nombre del cliente" readonly fluid class="uppercase" style="text-transform: uppercase;" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Codigo Cliente</label>
-        <InputText v-model="form.cod_cliente" placeholder="RNC / Cedula" :disabled="facturaBloqueadaFiscal" fluid />
+        <InputText v-model="form.cod_cliente" placeholder="RNC / Cedula" readonly fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Telefono</label>
-        <InputText v-model="form.telefono_cliente" placeholder="Telefono" :disabled="facturaBloqueadaFiscal" fluid />
+        <InputText v-model="form.telefono_cliente" placeholder="Telefono" readonly fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Vendedor</label>
-        <InputText v-model="form.vendedor" placeholder="Vendedor" :disabled="facturaBloqueadaFiscal" fluid class="uppercase" style="text-transform: uppercase;" />
+        <InputText v-model="form.vendedor" placeholder="Vendedor" readonly fluid class="uppercase" style="text-transform: uppercase;" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Metodo Pago</label>
-        <Select v-model="form.metodo_pago" :options="metodosPago" optionLabel="label" optionValue="value" :disabled="facturaBloqueadaFiscal" fluid />
+        <Select v-model="form.metodo_pago" :options="metodosPago" optionLabel="label" optionValue="value" disabled fluid />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Estado</label>
-        <Select v-model="form.estado_factura" :options="estadosFactura" optionLabel="label" optionValue="value" :disabled="facturaBloqueadaFiscal" fluid />
+        <Select v-model="form.estado_factura" :options="estadosFactura" optionLabel="label" optionValue="value" disabled fluid />
       </div>
       </div>
     </section>
@@ -383,24 +469,24 @@ onMounted(cargarDatos)
       <section class="rounded-2xl border border-surface-200 bg-surface-0 p-4 shadow-sm dark:border-surface-700 dark:bg-surface-900 sm:p-5 lg:col-span-3">
         <div class="mb-4 flex items-center gap-2">
           <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 text-violet-600 dark:bg-violet-950/50 dark:text-violet-300"><i class="pi pi-credit-card"></i></span>
-          <div><h2 class="font-semibold">Distribucion del pago</h2><p class="text-xs text-surface-500">Registra los montos recibidos por cada metodo.</p></div>
+          <div><h2 class="font-semibold">Distribucion del pago</h2><p class="text-xs text-surface-500">Montos registrados por cada metodo.</p></div>
         </div>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Efectivo</label>
-        <InputNumber v-model="form.efectivo" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.efectivo" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Tarjeta</label>
-        <InputNumber v-model="form.tarjeta" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.tarjeta" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Transferencia</label>
-        <InputNumber v-model="form.transferencia" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.transferencia" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Cheque</label>
-        <InputNumber v-model="form.cheque" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.cheque" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
         </div>
       </section>
@@ -408,32 +494,32 @@ onMounted(cargarDatos)
       <section class="rounded-2xl border border-surface-200 bg-surface-0 p-4 shadow-sm dark:border-surface-700 dark:bg-surface-900 sm:p-5 lg:col-span-2">
         <div class="mb-4 flex items-center gap-2">
           <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-300"><i class="pi pi-chart-line"></i></span>
-          <div><h2 class="font-semibold">Resumen financiero</h2><p class="text-xs text-surface-500">Totales y rentabilidad de la factura.</p></div>
+          <div><h2 class="font-semibold">Resumen financiero</h2><p class="text-xs text-surface-500">Totales y rentabilidad registrados en la factura.</p></div>
         </div>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Subtotal</label>
-        <InputNumber v-model="form.subtotal" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.subtotal" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Total</label>
-        <InputNumber v-model="form.total" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.total" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Costo</label>
-        <InputNumber v-model="form.costo" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.costo" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Impuesto</label>
-        <InputNumber v-model="form.impuesto" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.impuesto" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Descuento</label>
-        <InputNumber v-model="form.descuento" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.descuento" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
       <div class="flex flex-col gap-1">
         <label class="font-semibold text-sm">Ganancia</label>
-        <InputNumber v-model="form.ganancia" :disabled="facturaBloqueadaFiscal" mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
+        <InputNumber v-model="form.ganancia" readonly mode="currency" :currency="systemCurrency" :locale="systemLocale" fluid @focus="(e: any) => e.target.select()" />
       </div>
         </div>
       </section>
@@ -446,14 +532,35 @@ onMounted(cargarDatos)
       </div>
       <DataTable :value="productosParsed" stripedRows size="small" responsiveLayout="scroll" class="text-sm">
         <Column field="nombre" header="Producto">
-          <template #body="{ data }">{{ data.nombre || data.descripcion || data.producto || '—' }}</template>
+          <template #body="{ data }">
+            <div class="py-1">
+              <p class="font-medium text-surface-900 dark:text-surface-0">{{ data.nombre || data.descripcion || data.producto || '—' }}</p>
+              <p v-if="detalleVariantesProducto(data)" class="mt-0.5 text-xs font-medium text-primary-600 dark:text-primary-400">
+                {{ detalleVariantesProducto(data) }}
+              </p>
+              <div v-if="referenciasImeiProducto(data).length" class="mt-1 flex flex-wrap gap-1.5">
+                <button
+                  v-for="referencia in referenciasImeiProducto(data)"
+                  :key="`${referencia.id}:${referencia.nombre}`"
+                  type="button"
+                  class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2 py-1 text-xs font-semibold text-primary-700 transition hover:border-primary-400 hover:bg-primary-100 focus:outline-none focus:ring-2 focus:ring-primary-400 dark:border-primary-800 dark:bg-primary-950/40 dark:text-primary-300"
+                  :disabled="!!imeiConsultando"
+                  @click="consultarDetalleImei(referencia)"
+                >
+                  <i :class="imeiConsultando === `${referencia.id}:${referencia.nombre}` ? 'pi pi-spin pi-spinner' : 'pi pi-mobile'"></i>
+                  IMEI: {{ referencia.nombre }}
+                </button>
+              </div>
+              <p v-else-if="detalleIdentificadorProducto(data)" class="mt-0.5 text-xs text-surface-500">{{ detalleIdentificadorProducto(data) }}</p>
+            </div>
+          </template>
         </Column>
         <Column field="cantidad" header="Cant" style="width: 4rem" />
         <Column field="precio" header="Precio" style="width: 7rem">
-          <template #body="{ data }">{{ $formatMoney(data.precio || data.precio_venta || 0) }}</template>
+          <template #body="{ data }">{{ $formatMoney(precioProducto(data)) }}</template>
         </Column>
         <Column field="total" header="Total" style="width: 7rem">
-          <template #body="{ data }">{{ $formatMoney(data.total) }}</template>
+          <template #body="{ data }">{{ $formatMoney(totalProducto(data)) }}</template>
         </Column>
       </DataTable>
     </section>
@@ -473,5 +580,64 @@ onMounted(cargarDatos)
 
     <TicketFacturaPrint ref="ticketPrintRef" />
     <FacturaPdfPrint ref="facturaPdfRef" />
+
+    <Dialog
+      v-model:visible="dialogDetalleImei"
+      :header="`Detalle del IMEI ${imeiDetalle?.nombre || ''}`"
+      modal
+      :style="{ width: 'min(52rem, 96vw)' }"
+      :draggable="false"
+    >
+      <div v-if="imeiDetalle" class="space-y-4 pt-1">
+        <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800/60">
+          <div>
+            <p class="font-mono text-lg font-bold text-surface-900 dark:text-surface-0">{{ imeiDetalle.nombre }}</p>
+            <p class="mt-0.5 text-sm text-surface-500">{{ imeiDetalle.equipo_detalle }}</p>
+          </div>
+          <span class="rounded-full bg-primary-100 px-3 py-1 text-xs font-bold text-primary-700 dark:bg-primary-900/50 dark:text-primary-200">
+            {{ etiquetaEstadoImei(imeiDetalle.estado) }}
+          </span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div v-for="campo in [
+            ['Color', imeiDetalle.color || '—'],
+            ['Capacidad', imeiDetalle.capacidad || '—'],
+            ['Bateria', imeiDetalle.bateria || '—'],
+            ['Costo', $formatMoney(imeiDetalle.costo || 0)],
+            ['Precio venta', $formatMoney(imeiDetalle.precio_venta || 0)],
+            ['Precio minimo', $formatMoney(imeiDetalle.precio_min || 0)],
+            ['Precio mayor', $formatMoney(imeiDetalle.precio_xmayor || 0)],
+            ['Precio vendido', $formatMoney(imeiDetalle.precio_vendido || 0)],
+            ['Proveedor', imeiDetalle.proveedor || '—'],
+            ['No. compra', imeiDetalle.no_compra || '—'],
+            ['Comprador', imeiDetalle.comprador || '—'],
+            ['No. factura', imeiDetalle.no_factura || '—'],
+            ['Fecha venta', imeiDetalle.fecha_venta || '—'],
+            ['Hora venta', imeiDetalle.hora_venta || '—'],
+            ['ID de equipo', imeiDetalle.id_equi || '—'],
+            ['Almacen', imeiDetalle.almacen_id || imeiDetalle.almacen_uid || '—'],
+          ]"
+          :key="String(campo[0])"
+          class="min-w-0 rounded-lg border border-surface-200 p-3 dark:border-surface-700"
+          >
+            <p class="text-[11px] font-semibold uppercase tracking-wide text-surface-400">{{ campo[0] }}</p>
+            <p class="mt-1 break-words text-sm font-medium text-surface-800 dark:text-surface-100">{{ campo[1] }}</p>
+          </div>
+        </div>
+
+        <div v-if="imeiDetalle.nota" class="rounded-lg border border-surface-200 p-3 dark:border-surface-700">
+          <p class="text-[11px] font-semibold uppercase tracking-wide text-surface-400">Nota</p>
+          <p class="mt-1 whitespace-pre-wrap text-sm text-surface-700 dark:text-surface-200">{{ imeiDetalle.nota }}</p>
+        </div>
+        <div class="grid gap-2 text-xs text-surface-400 sm:grid-cols-2">
+          <p>ID: {{ imeiDetalle.id || '—' }} · UID: {{ imeiDetalle.uid || '—' }}</p>
+          <p class="sm:text-right">Creado: {{ imeiDetalle.created_at || '—' }} · Actualizado: {{ imeiDetalle.updated_at || '—' }}</p>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cerrar" severity="secondary" @click="dialogDetalleImei = false" />
+      </template>
+    </Dialog>
   </div>
 </template>

@@ -245,7 +245,7 @@ onMounted(cargarConfig)
       <div class="flex flex-col items-center gap-4 py-2">
         <div class="w-14 h-14 rounded-2xl flex items-center justify-center" style="background:var(--p-primary-500)"><i class="pi pi-shield text-white text-xl"></i></div>
         <p class="text-sm text-surface-500 text-center">Hemos enviado un codigo de verificacion a <strong>{{ form.email }}</strong></p>
-        <InputOtp v-model="otpInput" :length="6" class="gap-2" />
+        <InputOtp v-model="otpInput" :length="6" mask class="gap-2" />
         <p v-if="otpError" class="text-red-500 text-xs">{{ otpError }}</p>
         <button @click="solicitarOtp" class="text-xs text-primary hover:underline" :disabled="otpEnviando">Reenviar codigo</button>
       </div>
