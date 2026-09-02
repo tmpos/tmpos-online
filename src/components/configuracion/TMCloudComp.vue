@@ -982,6 +982,7 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'fondo_barra', type: 'TEXT', default: 'white' },
     { name: 'tono_barra', type: 'TEXT', default: '500' },
     { name: 'color_texto_barra', type: 'TEXT', default: 'auto' },
+    { name: 'tema_visual', type: 'TEXT', default: 'standard' },
     { name: 'almacen_id', type: 'INTEGER', default: 0 },
     { name: 'almacen_uid', type: 'TEXT', required: true, indexed: true },
     { name: 'created_at', type: 'DATETIME' },

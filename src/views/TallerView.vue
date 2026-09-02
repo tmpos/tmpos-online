@@ -2,7 +2,7 @@
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
 
 const { currency: systemCurrency, locale: systemLocale } = useLocaleProfile()
-import { ref, shallowRef, computed, nextTick, defineAsyncComponent } from 'vue'
+import { ref, shallowRef, computed, nextTick, defineAsyncComponent, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import SubMenu from '@/components/SubMenu.vue'
 import type { SubMenuItem } from '@/components/SubMenu.vue'
@@ -68,10 +68,12 @@ function onSelect(key: string) {
   active.value = key
 }
 
-const tabRuta = String(route.query.tab || '')
-active.value = items.value.some(item => item.key === tabRuta && item.key !== 'orden-express')
-  ? tabRuta
-  : (items.value.find(i => i.key !== 'orden-express')?.key || items.value[0]?.key || '')
+watch(() => route.query.tab, tab => {
+  const key = String(tab || '')
+  active.value = items.value.some(item => item.key === key && item.key !== 'orden-express')
+    ? key
+    : (items.value.find(item => item.key !== 'orden-express')?.key || items.value[0]?.key || '')
+}, { immediate: true })
 
 function formatearNumeroOrdenExpress(id: number) {
   return `EXP-${String(id).padStart(6, '0')}`

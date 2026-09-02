@@ -17,6 +17,39 @@
   --p-focus-ring-color: rgb(99 102 241 / 0.32);
 }
 
+/* ─── Glass preset: macOS-inspired translucency and depth ─── */
+.glass {
+  --app-surface: rgba(255, 255, 255, 0.62);
+  --app-surface-solid: rgba(255, 255, 255, 0.82);
+  --app-surface-muted: rgba(241, 245, 249, 0.54);
+  --app-border: rgba(255, 255, 255, 0.66);
+  --app-border-strong: rgba(255, 255, 255, 0.9);
+  --radius-2xl: 1rem;
+  --radius-lg: 0.75rem;
+  --shadow-card: 0 18px 48px -30px rgb(15 23 42 / 0.38), inset 0 1px 0 rgb(255 255 255 / 0.72);
+  --shadow-card-hover: 0 24px 58px -30px rgb(15 23 42 / 0.48), inset 0 1px 0 rgb(255 255 255 / 0.84);
+  --shadow-dropdown: 0 26px 70px -28px rgb(15 23 42 / 0.42), inset 0 1px 0 rgb(255 255 255 / 0.72);
+}
+
+.glass.dark {
+  --app-surface: rgba(15, 23, 42, 0.52);
+  --app-surface-solid: rgba(15, 23, 42, 0.76);
+  --app-surface-muted: rgba(30, 41, 59, 0.46);
+  --app-border: rgba(255, 255, 255, 0.13);
+  --app-border-strong: rgba(255, 255, 255, 0.22);
+  --shadow-card: 0 20px 54px -28px rgb(0 0 0 / 0.78), inset 0 1px 0 rgb(255 255 255 / 0.1);
+  --shadow-card-hover: 0 28px 66px -30px rgb(0 0 0 / 0.9), inset 0 1px 0 rgb(255 255 255 / 0.14);
+  --shadow-dropdown: 0 30px 80px -28px rgb(0 0 0 / 0.88), inset 0 1px 0 rgb(255 255 255 / 0.12);
+}
+
+.glass body {
+  background: #dbeafe;
+}
+
+.glass.dark body {
+  background: #07101f;
+}
+
 /* ─── Design Tokens: Light ─── */
 :root {
   --color-accent-50: #eef2ff; --color-accent-100: #e0e7ff; --color-accent-200: #c7d2fe;
@@ -60,63 +93,6 @@
   --shadow-card: 0 14px 34px -26px rgb(0 0 0 / 0.82), 0 1px 2px rgb(0 0 0 / 0.34);
   --shadow-card-hover: 0 18px 44px -28px rgb(0 0 0 / 0.92), 0 2px 8px rgb(0 0 0 / 0.38);
   --shadow-dropdown: 0 20px 48px -18px rgb(0 0 0 / 0.72);
-}
-
-/* ─── Visual Style: Glass ───
-   Opt-in theme (Configuracion > Sistema > Estilo Visual). Overrides the
-   --app-* surface tokens that cards/panels/dialogs already read, so most
-   of the UI turns translucent/blurred without per-component changes. */
-.theme-glass {
-  --app-surface: rgba(255, 255, 255, 0.5);
-  --app-surface-solid: rgba(255, 255, 255, 0.72);
-  --app-surface-muted: rgba(255, 255, 255, 0.38);
-  --app-border: rgba(255, 255, 255, 0.55);
-  --app-border-strong: rgba(255, 255, 255, 0.8);
-  --app-blur: 22px;
-}
-
-.theme-glass body {
-  background:
-    radial-gradient(circle at 12% 12%, rgba(99, 102, 241, 0.32), transparent 42%),
-    radial-gradient(circle at 88% 22%, rgba(236, 72, 153, 0.26), transparent 42%),
-    radial-gradient(circle at 50% 92%, rgba(16, 185, 129, 0.24), transparent 48%),
-    linear-gradient(160deg, #eef2ff 0%, #f8fafc 55%, #e0f2fe 100%);
-  background-attachment: fixed;
-}
-
-.theme-glass.dark {
-  --app-surface: rgba(15, 23, 42, 0.4);
-  --app-surface-solid: rgba(15, 23, 42, 0.65);
-  --app-surface-muted: rgba(30, 41, 59, 0.32);
-  --app-border: rgba(148, 163, 184, 0.26);
-  --app-border-strong: rgba(148, 163, 184, 0.42);
-}
-
-.theme-glass.dark body {
-  background:
-    radial-gradient(circle at 12% 12%, rgba(99, 102, 241, 0.34), transparent 42%),
-    radial-gradient(circle at 88% 22%, rgba(236, 72, 153, 0.22), transparent 42%),
-    radial-gradient(circle at 50% 92%, rgba(16, 185, 129, 0.2), transparent 48%),
-    linear-gradient(160deg, #020617 0%, #0f172a 55%, #020617 100%);
-  background-attachment: fixed;
-}
-
-.theme-glass :where(.p-dialog-header, .p-dialog-content, .p-dialog-footer) {
-  backdrop-filter: blur(var(--app-blur));
-}
-
-.theme-glass :where(.p-datatable-tbody > tr) {
-  background: var(--app-surface-muted) !important;
-}
-
-.theme-glass :where(.p-inputtext, .p-password-input, .p-inputnumber-input, .p-select, .p-multiselect, .p-textarea) {
-  background: rgba(255, 255, 255, 0.65) !important;
-  backdrop-filter: blur(8px);
-}
-
-.theme-glass.dark :where(.p-inputtext, .p-password-input, .p-inputnumber-input, .p-select, .p-multiselect, .p-textarea) {
-  background: rgba(15, 23, 42, 0.5) !important;
-  backdrop-filter: blur(8px);
 }
 
 /* ─── Base Styles ─── */
@@ -346,6 +322,27 @@
     backdrop-filter: blur(var(--app-blur));
   }
 
+  :where(.glass .p-card, .glass .p-panel, .glass .p-fieldset, .glass .p-toolbar,
+    .glass .p-dialog, .glass .p-popover, .glass .p-select-overlay, .glass .p-menu,
+    .glass .p-datatable, .glass .card-pro, .glass .section-pro) {
+    -webkit-backdrop-filter: saturate(155%) blur(24px);
+    backdrop-filter: saturate(155%) blur(24px);
+  }
+
+  :where(.glass .p-inputtext, .glass .p-password-input, .glass .p-inputnumber-input,
+    .glass .p-select, .glass .p-multiselect, .glass .p-textarea, .glass textarea, .glass select) {
+    background: rgba(255, 255, 255, 0.56) !important;
+    border-color: rgba(255, 255, 255, 0.78) !important;
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+  }
+
+  :where(.glass.dark .p-inputtext, .glass.dark .p-password-input, .glass.dark .p-inputnumber-input,
+    .glass.dark .p-select, .glass.dark .p-multiselect, .glass.dark .p-textarea, .glass.dark textarea, .glass.dark select) {
+    background: rgba(15, 23, 42, 0.48) !important;
+    border-color: rgba(255, 255, 255, 0.14) !important;
+  }
+
   :where(.p-toolbar) {
     padding: 0.75rem !important;
   }
@@ -478,6 +475,33 @@
   }
 }
 
+.theme-preset-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.9rem;
+  background: var(--app-surface-muted);
+  color: inherit;
+  text-align: left;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+.theme-preset-card:hover { transform: translateY(-1px); border-color: var(--p-primary-300); }
+.theme-preset-card--active { border-color: var(--p-primary-500); box-shadow: 0 0 0 3px color-mix(in srgb, var(--p-primary-500) 15%, transparent); }
+.theme-preset-card > .pi { margin-left: auto; color: var(--p-primary-500); }
+.theme-preset-copy { display: flex; min-width: 0; flex-direction: column; }
+.theme-preset-copy strong { font-size: 0.8rem; }
+.theme-preset-copy small { overflow: hidden; color: var(--color-surface-500); font-size: 0.65rem; text-overflow: ellipsis; white-space: nowrap; }
+.theme-preview { display: grid; width: 2.7rem; height: 2.25rem; flex: 0 0 auto; grid-template-columns: 0.65rem 1fr; grid-template-rows: 0.45rem 1fr; gap: 0.2rem; padding: 0.3rem; border-radius: 0.55rem; background: #e2e8f0; }
+.theme-preview span { border-radius: 0.18rem; background: rgba(255, 255, 255, 0.94); }
+.theme-preview span:first-child { grid-column: 1 / -1; background: #fff; }
+.theme-preview span:nth-child(2) { background: #94a3b8; }
+.theme-preview--glass { background: linear-gradient(145deg, #93c5fd, #c4b5fd 55%, #fbcfe8); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7); }
+.theme-preview--glass span { border: 1px solid rgb(255 255 255 / 0.66); background: rgb(255 255 255 / 0.48); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.58); }
+
 /* ─── Utility Overrides ─── */
 @layer utilities {
   .p-dialog {
@@ -528,5 +552,114 @@
     .hide-on-mobile {
       display: revert !important;
     }
+  }
+}
+
+/* Glass must remain last: utility background classes otherwise make panels opaque. */
+html.glass {
+  --app-surface: rgba(255, 255, 255, 0.48);
+  --app-surface-solid: rgba(255, 255, 255, 0.68);
+  --app-surface-muted: rgba(255, 255, 255, 0.34);
+  --app-border: rgba(255, 255, 255, 0.72);
+  --app-border-strong: rgba(255, 255, 255, 0.94);
+  --radius-2xl: 1rem;
+  --radius-lg: 0.75rem;
+  --shadow-card: 0 18px 46px -25px rgba(35, 55, 90, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.86);
+  --shadow-card-hover: 0 26px 60px -26px rgba(35, 55, 90, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.94);
+  --shadow-dropdown: 0 30px 72px -26px rgba(26, 40, 70, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+html.glass.dark {
+  --app-surface: rgba(12, 20, 36, 0.46);
+  --app-surface-solid: rgba(12, 20, 36, 0.66);
+  --app-surface-muted: rgba(30, 41, 59, 0.34);
+  --app-border: rgba(255, 255, 255, 0.14);
+  --app-border-strong: rgba(255, 255, 255, 0.24);
+}
+
+html.glass :where(
+  [class~="bg-surface-0"],
+  [class~="bg-surface-50"],
+  [class~="bg-surface-100"],
+  .card-pro,
+  .section-pro,
+  .dashboard-kpi,
+  .dashboard-action,
+  .dashboard-panel
+) {
+  background: var(--app-surface) !important;
+  border-color: var(--app-border) !important;
+  box-shadow: var(--shadow-card);
+  -webkit-backdrop-filter: saturate(165%) blur(26px);
+  backdrop-filter: saturate(165%) blur(26px);
+}
+
+html.glass.dark :where(
+  [class~="dark:bg-surface-700"],
+  [class~="dark:bg-surface-800"],
+  [class~="dark:bg-surface-900"],
+  [class~="dark:bg-surface-900/50"],
+  .dashboard-kpi,
+  .dashboard-action,
+  .dashboard-panel
+) {
+  background: var(--app-surface) !important;
+  border-color: var(--app-border) !important;
+}
+
+html.glass :where(.p-dialog, .p-drawer, .p-popover, .p-menu, .p-select-overlay, .p-multiselect-overlay) {
+  background: var(--app-surface-solid) !important;
+  border: 1px solid var(--app-border) !important;
+  box-shadow: var(--shadow-dropdown) !important;
+  -webkit-backdrop-filter: saturate(175%) blur(34px);
+  backdrop-filter: saturate(175%) blur(34px);
+}
+
+html.glass :where(.p-dialog-header, .p-dialog-content, .p-dialog-footer, .p-drawer-header, .p-drawer-content) {
+  background: transparent !important;
+}
+
+html.glass :where(.p-datatable, .p-datatable-table-container) {
+  background: transparent !important;
+  -webkit-backdrop-filter: saturate(165%) blur(26px);
+  backdrop-filter: saturate(165%) blur(26px);
+}
+
+html.glass :where(.p-datatable-header, .p-datatable-thead > tr > th, .p-paginator) {
+  background: rgba(255, 255, 255, 0.3) !important;
+}
+
+html.glass :where(.p-datatable-tbody > tr) {
+  background: rgba(255, 255, 255, 0.42) !important;
+}
+
+html.glass.dark :where(.p-datatable-header, .p-datatable-thead > tr > th, .p-paginator) {
+  background: rgba(15, 23, 42, 0.34) !important;
+}
+
+html.glass.dark :where(.p-datatable-tbody > tr) {
+  background: rgba(15, 23, 42, 0.4) !important;
+}
+
+html.glass :where(.p-inputtext, .p-password-input, .p-inputnumber-input, .p-select, .p-multiselect, .p-textarea, textarea, select) {
+  background: rgba(255, 255, 255, 0.46) !important;
+  border-color: rgba(255, 255, 255, 0.76) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 8px 24px -22px rgba(15, 23, 42, 0.6);
+}
+
+html.glass.dark :where(.p-inputtext, .p-password-input, .p-inputnumber-input, .p-select, .p-multiselect, .p-textarea, textarea, select) {
+  background: rgba(15, 23, 42, 0.4) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+html.glass :where(.p-button) {
+  box-shadow: 0 12px 28px -20px color-mix(in srgb, var(--p-primary-600) 72%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html.glass :where(*) {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
   }
 }

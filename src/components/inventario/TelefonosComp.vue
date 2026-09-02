@@ -1161,7 +1161,7 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
                 @click="abrirDetalle(tel)"
                 @contextmenu.prevent="() => { flippedTelId = flippedTelId === tel.id ? null : tel.id; imeiSearch = '' }"
               >
-                <div class="phone-card-media relative min-h-0 flex-1 flex items-center justify-center overflow-hidden">
+                <div class="phone-card-media absolute inset-0 flex items-center justify-center overflow-hidden">
                   <div class="absolute inset-x-3 top-3 z-10 flex min-w-0 items-center justify-between gap-2">
                     <span class="rounded-full border border-white/70 bg-white/90 px-2.5 py-1 text-[10px] font-mono font-semibold text-surface-500 shadow-sm backdrop-blur dark:border-surface-600/70 dark:bg-surface-900/85 dark:text-surface-300">#{{ tel.id }}</span>
                     <span class="max-w-[70%] truncate rounded-full border border-green-200 bg-green-50/95 px-2.5 py-1 text-[10px] font-semibold text-green-700 shadow-sm backdrop-blur dark:border-green-800 dark:bg-green-900/80 dark:text-green-300">
@@ -1172,22 +1172,24 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
                   <img
                     v-if="imagenUrl(tel.imagen)"
                     :src="imagenUrl(tel.imagen)"
-                    class="phone-card-image h-full w-full object-contain"
+                    class="phone-card-image h-full w-full object-cover"
                     :alt="`Imagen de ${tel.nombre || 'teléfono'}`"
                     loading="lazy"
                   />
-                  <div v-else class="phone-card-placeholder flex h-24 w-24 items-center justify-center rounded-3xl border border-primary-200/70 bg-primary-100/80 shadow-inner dark:border-primary-800 dark:bg-primary-900/60">
+                  <div v-else class="phone-card-placeholder flex h-full w-full items-center justify-center">
                     <i class="pi pi-mobile text-4xl text-primary-600 dark:text-primary-300"></i>
                   </div>
                 </div>
 
-                <div class="phone-card-info shrink-0 border-t border-surface-200/80 bg-surface-0 px-4 py-3.5 dark:border-surface-700 dark:bg-surface-800">
-                  <h4 class="phone-card-name whitespace-normal break-words text-base font-bold uppercase leading-snug text-surface-900 dark:text-surface-0" :title="tel.nombre">
+                <div class="phone-card-info absolute inset-x-0 bottom-0 z-10 px-4 pb-4 pt-16">
+                  <h4 class="phone-card-name whitespace-normal break-words text-base font-bold uppercase leading-snug text-white" :title="tel.nombre">
                     {{ tel.nombre }}
                   </h4>
-                  <div class="mt-1.5 flex items-center justify-between gap-2 text-xs text-surface-500 dark:text-surface-400">
+                  <div class="mt-1.5 flex items-center justify-between gap-2 text-xs text-white/75">
                     <span>Ver detalles y opciones</span>
-                    <i class="pi pi-arrow-right shrink-0 text-[11px] text-primary"></i>
+                    <span class="phone-card-arrow flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/15 backdrop-blur-md">
+                      <i class="pi pi-arrow-right text-[11px] text-white"></i>
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1814,31 +1816,53 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
 }
 
 .phone-card-front {
-  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px rgb(15 23 42 / 0.06);
+  background: #111827;
+  box-shadow: 0 2px 5px rgb(15 23 42 / 0.12), 0 16px 38px -18px rgb(15 23 42 / 0.38);
   transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .phone-card:hover .phone-card-front {
   border-color: color-mix(in srgb, var(--p-primary-color) 42%, transparent);
-  box-shadow: 0 14px 35px rgb(15 23 42 / 0.13);
-  transform: translateY(-2px);
+  box-shadow: 0 24px 50px -20px rgb(15 23 42 / 0.48);
+  transform: translateY(-4px);
 }
 
 .phone-card-media {
   background:
-    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--p-primary-color) 10%, transparent), transparent 56%),
-    linear-gradient(145deg, var(--p-surface-50), var(--p-surface-100));
+    radial-gradient(circle at 50% 36%, color-mix(in srgb, var(--p-primary-color) 24%, transparent), transparent 56%),
+    linear-gradient(145deg, var(--p-surface-100), var(--p-surface-200));
+}
+
+.phone-card-media::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  background: linear-gradient(180deg, rgb(2 6 23 / 0.18) 0%, transparent 32%, transparent 48%, rgb(2 6 23 / 0.22) 65%, rgb(2 6 23 / 0.92) 100%);
 }
 
 .phone-card-image {
-  padding: 2.6rem 1.35rem 1rem;
-  filter: drop-shadow(0 12px 14px rgb(15 23 42 / 0.16));
-  transition: transform 220ms ease, filter 220ms ease;
+  filter: saturate(1.04) contrast(1.02);
+  transition: transform 450ms cubic-bezier(0.2, 0.75, 0.25, 1), filter 300ms ease;
 }
 
 .phone-card:hover .phone-card-image {
+  filter: saturate(1.1) contrast(1.04);
+  transform: scale(1.065);
+}
+
+.phone-card-info { text-shadow: 0 1px 3px rgb(2 6 23 / 0.72); }
+.phone-card-arrow {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 6px 18px -10px rgb(0 0 0 / 0.8);
+  transition: transform 180ms ease, background-color 180ms ease;
+}
+.phone-card:hover .phone-card-arrow { background: rgb(255 255 255 / 0.24); transform: translateX(2px); }
+.phone-card-placeholder {
+  background: radial-gradient(circle at 50% 36%, color-mix(in srgb, var(--p-primary-color) 32%, transparent), transparent 40%), linear-gradient(145deg, var(--p-surface-100), var(--p-surface-200));
+}
+.phone-card-placeholder .pi {
+  font-size: 5rem;
   filter: drop-shadow(0 16px 18px rgb(15 23 42 / 0.2));
-  transform: scale(1.035);
 }
 
 .phone-card-name {
@@ -1849,8 +1873,12 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
 
 :global(.dark) .phone-card-media {
   background:
-    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--p-primary-color) 16%, transparent), transparent 58%),
+    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--p-primary-color) 24%, transparent), transparent 58%),
     linear-gradient(145deg, var(--p-surface-800), var(--p-surface-900));
+}
+
+:global(.dark) .phone-card-placeholder {
+  background: radial-gradient(circle at 50% 36%, color-mix(in srgb, var(--p-primary-color) 28%, transparent), transparent 42%), linear-gradient(145deg, var(--p-surface-800), var(--p-surface-900));
 }
 
 .telefonos-table-wrap {
@@ -1887,10 +1915,6 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
 @media (max-width: 480px) {
   .phone-card-inner {
     height: 21.5rem;
-  }
-
-  .phone-card-image {
-    padding-inline: 2rem;
   }
 
   :deep(.telefonos-table .p-datatable-thead > tr > th),

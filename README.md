@@ -1,7 +1,7 @@
 # TMPOS Desktop
 
-[![Versión](https://img.shields.io/badge/versión-2.14.0-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.0)
-[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.14.0/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.0)
+[![Versión](https://img.shields.io/badge/versión-2.14.1-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.1)
+[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.14.1/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.1)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows)](https://github.com/tmpos/tmpos-online/releases/latest)
 
 Sistema profesional de punto de venta, inventario, facturación, taller y administración comercial, con funcionamiento offline y sincronización mediante TMCloud.
@@ -14,11 +14,18 @@ El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos ex
 
 ## Descargar TMPOS para macOS
 
-[![Descargar TMPOS v2.13.13 para macOS](https://img.shields.io/badge/Descargar_TMPOS-v2.13.13_macOS-111827?style=for-the-badge&logo=apple)](https://github.com/tmpos/tmpos-online/releases/download/v2.13.13/TMPOS-2.13.13-x64.dmg)
+[![Descargar TMPOS v2.14.1 para macOS](https://img.shields.io/badge/Descargar_TMPOS-v2.14.1_macOS-111827?style=for-the-badge&logo=apple)](https://github.com/tmpos/tmpos-online/releases/download/v2.14.1/TMPOS-2.14.1-x64.dmg)
 
 Compatible con Macs Intel de 64 bits. Al no estar notarizada esta compilación, la primera apertura puede requerir clic derecho sobre TMPOS, seleccionar **Abrir** y confirmar.
 
-También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-online/releases/download/v2.13.13/TMPOS-2.13.13-x64.zip).
+También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-online/releases/download/v2.14.1/TMPOS-2.14.1-x64.zip).
+
+## Novedades de v2.14.1
+
+- Nuevo tema preconfigurado **Glass**, inspirado en macOS, con transparencias, desenfoque, profundidad y compatibilidad con modo claro y oscuro.
+- Apariencia Glass aplicada de forma consistente a paneles, tarjetas, tablas, diálogos, formularios, barra superior y pie de página.
+- Nueva búsqueda global para localizar rápidamente registros y secciones del sistema.
+- Mejoras de navegación, sincronización de apariencia y experiencia visual en ventas, contactos, taller e inventario.
 
 ## Novedades de v2.14.0
 

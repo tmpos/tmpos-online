@@ -377,6 +377,10 @@ onUnmounted(() => {
         </div>
 
         <div class="topbar-end">
+          <button class="action-btn search-trigger" type="button" title="Búsqueda universal (⌘K / Ctrl+K)" @click="window.dispatchEvent(new CustomEvent('global-search:open'))">
+            <i class="pi pi-search action-icon"></i>
+            <span class="search-shortcut hidden xl:inline">⌘K</span>
+          </button>
           <button
             v-if="auth.isCajero"
             type="button"
@@ -493,6 +497,19 @@ onUnmounted(() => {
   position: relative;
   z-index: 100;
   transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+:global(.glass) .app-topbar {
+  background: color-mix(in srgb, var(--topbar-bg, #ffffff) 58%, transparent) !important;
+  -webkit-backdrop-filter: saturate(170%) blur(28px);
+  backdrop-filter: saturate(170%) blur(28px);
+  border-bottom-color: color-mix(in srgb, var(--topbar-border, #cbd5e1) 48%, rgba(255, 255, 255, 0.7));
+  box-shadow: 0 18px 48px -30px rgba(15, 23, 42, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+:global(.glass.dark) .app-topbar {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 20px 52px -30px rgba(0, 0, 0, 0.88), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .app-topbar-inner {
@@ -736,6 +753,19 @@ onUnmounted(() => {
   border-color: var(--topbar-border, rgba(203, 213, 225, 0.88));
   color: var(--topbar-text, var(--p-slate-700));
   box-shadow: 0 8px 18px -18px rgba(15, 23, 42, 0.5);
+}
+
+.search-trigger {
+  border-color: var(--topbar-border, rgba(203, 213, 225, 0.72));
+  background: var(--topbar-hover-bg, rgba(255, 255, 255, 0.52));
+}
+
+.search-shortcut {
+  border: 1px solid var(--topbar-border, rgba(203, 213, 225, 0.72));
+  border-radius: 0.3rem;
+  padding: 0.08rem 0.28rem;
+  font-size: 0.55rem;
+  font-weight: 750;
 }
 
 

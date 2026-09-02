@@ -510,12 +510,14 @@ function createTables() {
     fondo_barra TEXT DEFAULT 'white',
     tono_barra TEXT DEFAULT '500',
     color_texto_barra TEXT DEFAULT 'auto',
+    tema_visual TEXT DEFAULT 'standard',
     almacen_id INTEGER DEFAULT 0,
     almacen_uid TEXT DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )`)
   try { db.run(`ALTER TABLE apariencia_almacen ADD COLUMN color_texto_barra TEXT DEFAULT 'auto'`) } catch {}
+  try { db.run(`ALTER TABLE apariencia_almacen ADD COLUMN tema_visual TEXT DEFAULT 'standard'`) } catch {}
 
   db.run(`CREATE TABLE IF NOT EXISTS gastos_fijos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

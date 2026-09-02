@@ -112,10 +112,36 @@ function onSelect(key: string) {
 </script>
 
 <template>
-  <div>
+  <div class="configuration-page">
     <SubMenu :items="items" :active="active" @select="onSelect" />
-    <KeepAlive>
-      <component :is="components[active]" />
-    </KeepAlive>
+    <div class="configuration-content">
+      <KeepAlive>
+        <component :is="components[active]" />
+      </KeepAlive>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.configuration-page {
+  width: 100%;
+  min-width: 0;
+  padding-bottom: 1rem;
+}
+
+.configuration-content {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 1px;
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 640px) {
+  .configuration-content {
+    padding-bottom: 0.75rem;
+  }
+}
+</style>

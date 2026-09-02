@@ -5106,7 +5106,6 @@ onMounted(async () => {
   })()
 
   const shortcuts = useAtajosTeclado({
-  'ctrl+k': () => { spotlight.abrirSpotlight(systemMode.isGeneralStore ? [] : telefonos.value, accesorios.value, clientes.value) },
     'ctrl+n': () => { abrirProductoPersonalizado(); sonidos.playClick() },
     'ctrl+l': () => { if (cart.value.length > 0) { limpiarCarrito(); sonidos.playClick() } },
     'ctrl+d': () => { abrirDialogDescuento(); sonidos.playClick() },
