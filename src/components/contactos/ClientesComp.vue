@@ -15,7 +15,7 @@ import Toast from 'primevue/toast'
 
 import { envioElectron, peticionesFetch, encryptarPassword } from '@/funciones/funciones.js'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
-import { getImageUrl, uploadImageSource, deleteImage } from '@/services/tmCloudClient'
+import { getImageUrl, uploadImage, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
 import { useFilteredSearch } from '@/composables/useSearch'
@@ -78,44 +78,34 @@ function abrirImagen(src: string) {
   dialogImagenVisible.value = true
 }
 
-async function quitarImagen() {
+async function guardarImagenCliente(imagen: string) {
   const imagenAnterior = form.value.imagen
-  try { await deleteImage(imagenAnterior) } catch {}
-  form.value.imagen = ''
-  if (isEditing.value && selectedCliente.value?.id) {
-    await window.db.update('clientes', selectedCliente.value.id, { imagen: '' })
-    const local = clientes.value.find((cliente: any) => cliente.id === selectedCliente.value.id)
-    if (local) local.imagen = ''
-    if (isOnline()) await pushLocalRowToCloud('clientes', selectedCliente.value.id)
+  form.value.imagen = imagen
+  if (!isEditing.value || !selectedCliente.value?.id) return
+
+  const actualizado = await window.db.update('clientes', selectedCliente.value.id, { imagen })
+  if (!actualizado.success) {
+    form.value.imagen = imagenAnterior
+    throw new Error(actualizado.error || 'No se pudo guardar la foto del cliente')
   }
-  if (fileInput.value) fileInput.value.value = ''
+
+  selectedCliente.value.imagen = imagen
+  const local = clientes.value.find((cliente: any) => cliente.id === selectedCliente.value.id)
+  if (local) local.imagen = imagen
+  if (isOnline()) await pushLocalRowToCloud('clientes', selectedCliente.value.id)
 }
 
-function imagenDesdeArchivo(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const img = new Image()
-      img.onload = () => {
-        const maxSide = 900
-        const ratio = Math.min(1, maxSide / Math.max(img.width, img.height))
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.max(1, Math.round(img.width * ratio))
-        canvas.height = Math.max(1, Math.round(img.height * ratio))
-        const ctx = canvas.getContext('2d')
-        if (!ctx) {
-          reject(new Error('No se pudo procesar la imagen'))
-          return
-        }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-        resolve(canvas.toDataURL('image/jpeg', 0.78))
-      }
-      img.onerror = () => reject(new Error('Imagen invalida'))
-      img.src = String(reader.result || '')
+async function quitarImagen() {
+  const imagenAnterior = form.value.imagen
+  try {
+    await guardarImagenCliente('')
+    if (imagenAnterior) {
+      try { await deleteImage(imagenAnterior) } catch {}
     }
-    reader.onerror = () => reject(new Error('No se pudo leer la imagen'))
-    reader.readAsDataURL(file)
-  })
+    if (fileInput.value) fileInput.value.value = ''
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo quitar la foto', life: 3500 })
+  }
 }
 
 async function procesarImagen(event: Event) {
@@ -135,14 +125,29 @@ async function procesarImagen(event: Event) {
     return
   }
 
+  if (!tmCloudConnected()) {
+    toast.add({ severity: 'warn', summary: 'TM Cloud no configurado', detail: 'Configura TM Cloud para subir fotos de clientes', life: 3500 })
+    input.value = ''
+    return
+  }
+
   subiendoImagen.value = true
   try {
-    const localImage = await imagenDesdeArchivo(file)
-    form.value.imagen = localImage
+    const imagenAnterior = form.value.imagen
+    const imagenNueva = await uploadImage(file, 'clientes')
+    try {
+      await guardarImagenCliente(imagenNueva)
+    } catch (error) {
+      try { await deleteImage(imagenNueva) } catch {}
+      throw error
+    }
+    if (imagenAnterior && imagenAnterior !== imagenNueva) {
+      try { await deleteImage(imagenAnterior) } catch {}
+    }
     toast.add({
-      severity: 'info',
-      summary: 'Foto lista',
-      detail: `La foto se subira al ${isEditing.value ? 'actualizar' : 'guardar'} el cliente`,
+      severity: 'success',
+      summary: 'Foto subida',
+      detail: isEditing.value ? 'La foto del cliente fue actualizada' : 'La foto se guardara con el nuevo cliente',
       life: 2500,
     })
   } catch (e: any) {
@@ -259,10 +264,6 @@ async function guardar() {
 
   guardandoCliente.value = true
   try {
-    if (/^data:/i.test(form.value.imagen)) {
-      form.value.imagen = await uploadImageSource(form.value.imagen, 'clientes', `cliente-${Date.now()}.jpg`)
-    }
-
     const data = {
       nombre: form.value.nombre.trim().toUpperCase(),
       rnc: form.value.rnc.trim(),

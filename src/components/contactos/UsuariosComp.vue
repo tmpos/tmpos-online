@@ -13,13 +13,16 @@ import Fieldset from 'primevue/fieldset'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAuthStore } from '@/stores/auth.store'
+import { useSystemModeStore } from '@/stores/systemMode'
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
-import { ensureConfigLoaded, fetchTable } from '@/services/tmCloudClient'
+import { ensureConfigLoaded, fetchTable, uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+import { USER_PERMISSION_GROUPS, getDefaultUserPermissions, getUserPermissionOptions, parseUserPermissions } from '@/config/userPermissions'
 
 import { envioElectron } from '@/funciones/funciones.js'
 
 const toast = useToast()
 const auth = useAuthStore()
+const systemMode = useSystemModeStore()
 const usuarios = ref<any[]>([])
 const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
@@ -33,6 +36,10 @@ const deleteOtpLoading = ref(false)
 const deleteOtpConfirmando = ref(false)
 const isEditing = ref(false)
 const selectedUsuario = ref<any>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
+const subiendoImagen = ref(false)
+const imagenPreview = ref('')
+const dialogImagenVisible = ref(false)
 const selectedUsuarios = ref<any[]>([])
 const usuariosPendientesEliminar = ref<any[]>([])
 const busqueda = ref('')
@@ -47,6 +54,10 @@ const roles = computed(() => {
     { label: 'Soporte', value: 'Soporte' },
   ]
 })
+
+const opcionesPermisos = computed(() => getUserPermissionOptions(systemMode.isGeneralStore))
+const permisosPredeterminados = computed(() => getDefaultUserPermissions(systemMode.isGeneralStore))
+const gruposPermisos = USER_PERMISSION_GROUPS
 
 const camposArray = [
   'nombre',
@@ -81,9 +92,132 @@ const formDefault = () => ({
   usuario: '',
   pin: '',
   rol: 'Usuario',
+  imagen: '',
+  permisos: [...permisosPredeterminados.value],
 })
 
 const form = ref(formDefault())
+
+function opcionesPorGrupo(grupo: string) {
+  return opcionesPermisos.value.filter(opcion => opcion.grupo === grupo)
+}
+
+function togglePermiso(key: string) {
+  const permisos = [...form.value.permisos]
+  const index = permisos.indexOf(key)
+  if (index >= 0) permisos.splice(index, 1)
+  else permisos.push(key)
+  form.value.permisos = permisos
+}
+
+function restablecerPermisos() {
+  form.value.permisos = [...permisosPredeterminados.value]
+}
+
+function iniciales(nombre: string) {
+  const partes = String(nombre || '').trim().split(/\s+/).filter(Boolean)
+  return partes.slice(0, 2).map(parte => parte.charAt(0)).join('').toUpperCase() || '?'
+}
+
+function imagenUsuarioUrl(valor: string | null | undefined): string {
+  return valor ? (getImageUrl(valor) || valor) : ''
+}
+
+function abrirImagen(src: string) {
+  imagenPreview.value = src
+  dialogImagenVisible.value = true
+}
+
+function actualizarImagenUsuarioActual(usuarioId: number, imagen: string) {
+  if (Number((auth.user as any)?.id || 0) === Number(usuarioId)) {
+    ;(auth.user as any).imagen = imagen
+  }
+}
+
+function actualizarPermisosUsuarioActual(usuarioId: number, permisos: string, rol: string) {
+  if (Number((auth.user as any)?.id || 0) === Number(usuarioId)) {
+    ;(auth.user as any).permisos = permisos
+    ;(auth.user as any).nivel_seguridad = rol
+  }
+}
+
+async function guardarImagenUsuario(imagen: string) {
+  const imagenAnterior = form.value.imagen
+  form.value.imagen = imagen
+  if (!isEditing.value || !selectedUsuario.value?.id) return
+
+  const actualizado = await window.db.update('usuarios', selectedUsuario.value.id, { imagen })
+  if (!actualizado.success) {
+    form.value.imagen = imagenAnterior
+    throw new Error(actualizado.error || 'No se pudo guardar la foto del usuario')
+  }
+
+  selectedUsuario.value.imagen = imagen
+  const local = usuarios.value.find((usuario: any) => usuario.id === selectedUsuario.value.id)
+  if (local) local.imagen = imagen
+  actualizarImagenUsuarioActual(Number(selectedUsuario.value.id), imagen)
+  if (isOnline()) await pushLocalRowToCloud('usuarios', selectedUsuario.value.id)
+}
+
+async function quitarImagen() {
+  const imagenAnterior = form.value.imagen
+  try {
+    await guardarImagenUsuario('')
+    if (imagenAnterior) {
+      try { await deleteImage(imagenAnterior) } catch {}
+    }
+    if (fileInput.value) fileInput.value.value = ''
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo quitar la foto', life: 3500 })
+  }
+}
+
+async function procesarImagen(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Selecciona una imagen valida', life: 3000 })
+    input.value = ''
+    return
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    toast.add({ severity: 'warn', summary: 'Imagen muy grande', detail: 'Selecciona una imagen menor a 8MB', life: 3000 })
+    input.value = ''
+    return
+  }
+  if (!tmCloudConnected()) {
+    toast.add({ severity: 'warn', summary: 'TM Cloud no configurado', detail: 'Configura TM Cloud para subir fotos de usuarios', life: 3500 })
+    input.value = ''
+    return
+  }
+
+  subiendoImagen.value = true
+  try {
+    const imagenAnterior = form.value.imagen
+    const imagenNueva = await uploadImage(file, 'usuarios')
+    try {
+      await guardarImagenUsuario(imagenNueva)
+    } catch (error) {
+      try { await deleteImage(imagenNueva) } catch {}
+      throw error
+    }
+    if (imagenAnterior && imagenAnterior !== imagenNueva) {
+      try { await deleteImage(imagenAnterior) } catch {}
+    }
+    toast.add({
+      severity: 'success',
+      summary: 'Foto subida',
+      detail: isEditing.value ? 'La foto del usuario fue actualizada' : 'La foto se guardara con el nuevo usuario',
+      life: 2500,
+    })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo subir la foto', life: 4000 })
+  } finally {
+    subiendoImagen.value = false
+    input.value = ''
+  }
+}
 
 function onDialogKeydown(e: KeyboardEvent) {
   if (e.shiftKey && e.ctrlKey) {
@@ -175,6 +309,8 @@ function abrirEditar(usuario: any) {
     usuario: usuario.email || '',
     pin: usuario.pin || '',
     rol: usuario.nivel_seguridad || 'Usuario',
+    imagen: usuario.imagen || '',
+    permisos: parseUserPermissions(usuario.permisos, permisosPredeterminados.value),
   }
   dialogVisible.value = true
 }
@@ -351,10 +487,10 @@ async function guardar() {
       nivel_seguridad: form.value.rol,
       intentos_login: selectedUsuario.value?.intentos_login || '',
       estado: selectedUsuario.value?.estado || 'ACTIVADO',
-      permisos: selectedUsuario.value?.permisos || '',
+      permisos: JSON.stringify(form.value.permisos),
       restrinciones: selectedUsuario.value?.restrinciones || '',
       porciento: selectedUsuario.value?.porciento || '',
-      imagen: selectedUsuario.value?.imagen || '',
+      imagen: form.value.imagen || '',
     }
 
     if (isEditing.value) {
@@ -400,6 +536,9 @@ async function guardar() {
         life: 3000,
       })
     }
+
+    actualizarImagenUsuarioActual(usuarioId, data.imagen)
+    actualizarPermisosUsuarioActual(usuarioId, data.permisos, data.nivel_seguridad)
 
     dialogVisible.value = false
     await cargarUsuarios()
@@ -547,7 +686,17 @@ onMounted(async () => {
           </template>
         </Column>
         <Column field="id" header="ID" style="width: 5rem" />
-        <Column field="nombre" header="Nombre" sortable />
+        <Column field="nombre" header="Nombre" sortable>
+          <template #body="{ data }">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-10 h-10 rounded-full overflow-hidden border border-surface-200 dark:border-surface-700 bg-primary-50 dark:bg-primary-900/30 flex items-center justify-center shrink-0">
+                <img v-if="data.imagen" :src="imagenUsuarioUrl(data.imagen)" class="w-full h-full object-cover" alt="Foto del usuario" />
+                <span v-else class="text-xs font-bold text-primary">{{ iniciales(data.nombre) }}</span>
+              </div>
+              <span class="font-semibold truncate">{{ data.nombre }}</span>
+            </div>
+          </template>
+        </Column>
         <Column field="email" header="Usuario" sortable />
         <Column field="pin" header="PIN" sortable style="width: 6rem">
           <template #body="{ data }">
@@ -577,9 +726,15 @@ onMounted(async () => {
               <i class="pi pi-id-card text-primary-500"></i>
             </div>
 
-            <div class="min-w-0">
-              <h4 class="font-bold text-lg leading-tight uppercase truncate">{{ usuario.nombre }}</h4>
-              <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ usuario.email || 'Sin usuario' }}</p>
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-16 h-16 rounded-full overflow-hidden border border-surface-200 dark:border-surface-700 bg-primary-50 dark:bg-primary-900/30 flex items-center justify-center shrink-0">
+                <img v-if="usuario.imagen" :src="imagenUsuarioUrl(usuario.imagen)" class="w-full h-full object-cover" alt="Foto del usuario" />
+                <span v-else class="text-lg font-bold text-primary">{{ iniciales(usuario.nombre) }}</span>
+              </div>
+              <div class="min-w-0">
+                <h4 class="font-bold text-lg leading-tight uppercase truncate">{{ usuario.nombre }}</h4>
+                <p class="text-sm text-surface-500 dark:text-surface-400 truncate">{{ usuario.email || 'Sin usuario' }}</p>
+              </div>
             </div>
 
             <div class="grid grid-cols-1 gap-1 text-sm">
@@ -606,10 +761,27 @@ onMounted(async () => {
       v-model:visible="dialogVisible"
       :header="isEditing ? 'Editar Usuario' : 'Nuevo Usuario'"
       modal
-      :style="{ width: '30rem' }"
+      :style="{ width: 'min(48rem, 94vw)' }"
       @keydown="onDialogKeydown"
     >
-      <div class="grid grid-cols-1 gap-4 pt-2">
+      <div class="grid grid-cols-1 gap-4 pt-2 max-h-[70vh] overflow-y-auto pr-1">
+        <div class="flex flex-col items-center gap-3">
+          <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="procesarImagen" />
+          <div class="relative w-28 h-28 rounded-full overflow-hidden border border-surface-200 dark:border-surface-700 bg-primary-50 dark:bg-primary-900/30 flex items-center justify-center">
+            <img
+              v-if="form.imagen"
+              :src="imagenUsuarioUrl(form.imagen)"
+              class="w-full h-full object-cover cursor-zoom-in"
+              alt="Foto del usuario"
+              @click="abrirImagen(imagenUsuarioUrl(form.imagen))"
+            />
+            <span v-else class="text-2xl font-bold text-primary">{{ iniciales(form.nombre) }}</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <Button :label="form.imagen ? 'Cambiar Foto' : 'Agregar Foto'" icon="pi pi-camera" severity="secondary" outlined size="small" :loading="subiendoImagen" @click="fileInput?.click()" />
+            <Button v-if="form.imagen" icon="pi pi-trash" severity="danger" text rounded size="small" @click="quitarImagen" v-tooltip="'Quitar foto'" />
+          </div>
+        </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Nombre</label>
           <InputText v-model="form.nombre" placeholder="Nombre" fluid class="uppercase" style="text-transform: uppercase;" />
@@ -638,12 +810,49 @@ onMounted(async () => {
           <label class="font-semibold text-sm">Rol</label>
           <Select v-model="form.rol" :options="roles" optionLabel="label" optionValue="value" fluid />
         </div>
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 p-3 space-y-3">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h4 class="font-semibold text-sm">Permisos</h4>
+              <p class="text-xs text-surface-500">{{ form.permisos.length }} permiso(s) seleccionado(s)</p>
+            </div>
+            <Button label="Restablecer" icon="pi pi-refresh" severity="secondary" text size="small" @click="restablecerPermisos" />
+          </div>
+          <p class="text-xs text-surface-500">
+            Selecciona los modulos a los que puede acceder. Los usuarios nuevos reciben todos los permisos disponibles de forma predeterminada.
+          </p>
+          <template v-for="grupo in gruposPermisos" :key="grupo">
+            <div v-if="opcionesPorGrupo(grupo).length" class="space-y-1.5">
+              <h5 class="text-xs font-semibold text-surface-400 uppercase tracking-wider">{{ grupo }}</h5>
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                <label
+                  v-for="opcion in opcionesPorGrupo(grupo)"
+                  :key="opcion.grupo + '-' + opcion.key"
+                  class="flex items-center gap-1.5 px-2.5 py-2 rounded-lg border cursor-pointer select-none transition-all text-xs"
+                  :class="form.permisos.includes(opcion.key)
+                    ? 'bg-primary text-primary-contrast border-primary'
+                    : 'border-surface-200 dark:border-surface-700 hover:border-primary-300'"
+                >
+                  <i :class="form.permisos.includes(opcion.key) ? 'pi pi-check-circle' : 'pi pi-circle'" class="text-xs"></i>
+                  <span>{{ opcion.label }}</span>
+                  <input type="checkbox" :checked="form.permisos.includes(opcion.key)" @change="togglePermiso(opcion.key)" class="hidden" />
+                </label>
+              </div>
+            </div>
+          </template>
+        </div>
       </div>
 
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="dialogVisible = false" />
-        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :disabled="pinDuplicado" @click="guardar" />
+        <Button :label="isEditing ? 'Actualizar' : 'Guardar'" icon="pi pi-check" :loading="subiendoImagen" :disabled="pinDuplicado || subiendoImagen" @click="guardar" />
       </template>
+    </Dialog>
+
+    <Dialog v-model:visible="dialogImagenVisible" header="Foto del usuario" modal :style="{ width: 'min(34rem, 94vw)' }">
+      <div class="flex items-center justify-center bg-surface-100 dark:bg-surface-900 rounded-xl overflow-hidden">
+        <img v-if="imagenPreview" :src="imagenPreview" class="max-w-full max-h-[70vh] object-contain" alt="Foto del usuario" />
+      </div>
     </Dialog>
 
     <Dialog

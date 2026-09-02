@@ -1208,7 +1208,6 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
           </template>
         </Column>
         <Column field="color" header="Color" sortable style="width: 7rem" />
-        <Column field="capacidad" header="Capacidad" sortable style="width: 7rem" />
         <Column field="precio_venta" header="Venta" sortable style="width: 7rem">
           <template #body="{ data }">
             {{ data.precio_venta ? `$${data.precio_venta.toFixed(2)}` : '$0.00' }}
@@ -1425,17 +1424,13 @@ useCloudRefresh(['serial', 'electrodomesticos'], cargarSeriales)
           </div>
         </div>
 
-        <div class="grid gap-3" :class="isEditing ? 'grid-cols-3' : 'grid-cols-2'">
+        <div class="grid grid-cols-2 gap-3">
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Color</label>
             <div class="flex items-center gap-2">
               <ColorSelect v-model="form.color" class="flex-1" />
               <Button icon="pi pi-plus" severity="info" text rounded size="small" @click="abrirColorRapido" v-tooltip="'Nuevo color'" />
             </div>
-          </div>
-          <div v-if="isEditing" class="flex flex-col gap-1">
-            <label class="font-semibold text-sm">Capacidad</label>
-            <CapacitySelect v-model="form.capacidad" />
           </div>
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Bateria</label>

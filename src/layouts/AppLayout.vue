@@ -117,8 +117,11 @@ onBeforeUnmount(() => {
   </div>
   <div v-else class="app-shell flex flex-col h-screen overflow-hidden text-surface-900 dark:text-surface-0">
     <AppTopbar />
-    <main class="app-main flex-1 min-h-0 min-w-0 overflow-auto">
-      <div class="app-main-inner">
+    <main
+      class="app-main flex-1 min-h-0 min-w-0 overflow-auto"
+      :class="{ 'app-main--pos': route.name === 'vender' }"
+    >
+      <div class="app-main-inner" :class="{ 'app-main-inner--pos': route.name === 'vender' }">
         <router-view :key="`${route.fullPath}:${contentRefreshKey}`" />
       </div>
     </main>
@@ -189,6 +192,17 @@ onBeforeUnmount(() => {
   min-height: 100%;
   min-width: 0;
   margin: 0 auto;
+}
+
+/* En el POS el viewport queda fijo para que solo los catalogos de productos
+   (telefonos, accesorios y electronicos) manejen su propio scroll vertical. */
+.app-main--pos {
+  overflow: hidden;
+}
+
+.app-main-inner--pos {
+  height: 100%;
+  min-height: 0;
 }
 
 .app-footer {

@@ -5396,7 +5396,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
 </script>
 
 <template>
-  <div class="h-full flex flex-col">
+  <div class="h-full min-h-0 overflow-hidden flex flex-col">
     <Toast />
 
     <div class="flex-1 flex flex-col lg:flex-row gap-4 min-h-0">

@@ -446,7 +446,7 @@ function invalidateCloudDataFromEvent(event: Event) {
 }
 const ONLINE_IMAGE_METADATA_TABLE = 'datos_config'
 const ONLINE_IMAGE_PREFIX = '__tmpos_imagen__:'
-const ONLINE_IMAGE_TABLES = new Set(['accesorios', 'telefonos', 'electrodomesticos', 'piezas'])
+const ONLINE_IMAGE_TABLES = new Set(['accesorios', 'telefonos', 'electrodomesticos', 'piezas', 'clientes', 'usuarios'])
 
 function onlineImageKey(tabla: string, rowKey: unknown): string {
   return `${ONLINE_IMAGE_PREFIX}${tabla}:${String(rowKey || '')}`

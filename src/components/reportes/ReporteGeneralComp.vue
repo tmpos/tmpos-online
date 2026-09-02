@@ -123,8 +123,8 @@ function getTallerTotal(orden: any): number {
   return toNumber(orden.precio_pieza ?? orden.preciopiezas) + toNumber(orden.mano_obra ?? orden.manodeobra)
 }
 
-function getTallerGanancia(orden: any): number {
-  return toNumber(orden.beneficio_empresa ?? orden.ganancia ?? orden.mano_obra ?? orden.manodeobra)
+function esOrdenTallerContabilizable(orden: any): boolean {
+  return normalizarEstadoTaller(orden?.estado) !== 'CANCELADO'
 }
 
 function normalizarEstadoTaller(estado: unknown): string {
@@ -208,6 +208,25 @@ function getGastoFecha(gasto: any): string {
     ? fechaCreadaLocal
     : (fechaGuardada || fechaCreadaLocal)
 }
+
+function esGastoTaller(gasto: any): boolean {
+  const comentario = String(gasto?.comentario || gasto?.descripcion || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+  return /^gasto\s+de\s+taller(?:\s*:|$)/.test(comentario)
+}
+
+function descripcionGastoTaller(gasto: any): string {
+  return String(gasto?.comentario || gasto?.descripcion || 'Gasto de taller')
+    .replace(/^gasto\s+de\s+taller\s*:\s*/i, '')
+    .trim() || 'Gasto de taller'
+}
+
+const gastosTaller = computed(() => gastos.value
+  .filter(esGastoTaller)
+  .sort((a: any, b: any) => getGastoFecha(b).localeCompare(getGastoFecha(a))))
 
 function getRango(key: string): { inicio: string; fin: string } {
   const now = new Date()
@@ -320,30 +339,49 @@ function recibidoTallerPorMetodo(orden: any, coincide: (metodo: unknown) => bool
 }
 
 const totales = computed(() => {
-  let total = 0, ganancia = 0, descuento = 0, porcentajeTarjeta = 0, facturasTarjeta = 0, count = 0, tallerIngresos = 0, tallerGanancia = 0, tallerOrdenes = 0, totalGastos = 0, totalGastosEfectivo = 0, totalGastosTransferencia = 0
-  for (const f of facturasFiltradas.value) {
-    total += toNumber(f.total)
-    ganancia += toNumber(f.ganancia)
-    descuento += toNumber(f.descuento)
+  let total = 0, ganancia = 0, descuento = 0, notasCreditoAplicadas = 0, porcentajeTarjeta = 0, facturasTarjeta = 0, count = 0, tallerValorOrdenes = 0, tallerIngresos = 0, tallerCobrado = 0, tallerOrdenes = 0, totalGastos = 0, totalGastosOperativos = 0, totalGastosTaller = 0, totalGastosEfectivo = 0, totalGastosTransferencia = 0
+  for (const f of facturas.value) {
+    total += calcularVentaFactura(f)
+    ganancia += calcularGananciaFactura(f)
+    descuento += calcularDescuentoComercial(f)
+    notasCreditoAplicadas += calcularNotaCreditoAplicada(f)
     const montoTarjeta = calcularRecargoTarjetaFactura(f)
     porcentajeTarjeta += montoTarjeta
     if (montoTarjeta > 0) facturasTarjeta++
     count++
   }
-  for (const t of tallerFiltrado.value) {
-    tallerIngresos += getTallerTotal(t)
-    tallerGanancia += getTallerGanancia(t)
+  for (const t of taller.value) {
+    if (esOrdenTallerContabilizable(t)) {
+      const valorOrden = getTallerTotal(t)
+      tallerValorOrdenes += valorOrden
+      tallerIngresos += valorOrden
+      tallerCobrado += montoRecibidoTaller(t)
+    }
     tallerOrdenes++
   }
   for (const g of gastos.value) {
     const montoGasto = toNumber(g.cantidad || g.monto)
     const metodoGasto = String(g.metodo_pago || 'EFECTIVO').trim().toUpperCase()
     totalGastos += montoGasto
-    if (metodoGasto.includes('TRANSFERENCIA')) totalGastosTransferencia += montoGasto
-    else totalGastosEfectivo += montoGasto
+    if (esGastoTaller(g)) totalGastosTaller += montoGasto
+    else totalGastosOperativos += montoGasto
+    if (metodoGasto === 'MIXTO') {
+      const efectivoMixto = Math.min(montoGasto, Math.max(0, toNumber(g.efectivo)))
+      const transferenciaMixta = Math.min(
+        Math.max(0, montoGasto - efectivoMixto),
+        Math.max(0, toNumber(g.transferencia)),
+      )
+      const distribuido = efectivoMixto + transferenciaMixta
+      totalGastosEfectivo += efectivoMixto + Math.max(0, montoGasto - distribuido)
+      totalGastosTransferencia += transferenciaMixta
+    } else if (metodoGasto.includes('TRANSFERENCIA')) {
+      totalGastosTransferencia += montoGasto
+    } else {
+      totalGastosEfectivo += montoGasto
+    }
   }
   let costo = 0, itemsCount = 0
-  for (const f of facturasFiltradas.value) {
+  for (const f of facturas.value) {
     costo += calcularCostoFactura(f)
     itemsCount += parseProductos(f.productos).length
   }
@@ -351,8 +389,9 @@ const totales = computed(() => {
   const margen = ventasSinRecargoTarjeta > 0 ? (ganancia / ventasSinRecargoTarjeta) * 100 : 0
   const ticketPromedio = count > 0 ? total / count : 0
   const itemsPorFactura = count > 0 ? itemsCount / count : 0
+  const tallerGanancia = tallerIngresos - totalGastosTaller
   const gananciaTotal = ganancia + tallerGanancia
-  const gananciaNeta = total - totalGastosEfectivo
+  const gananciaNeta = gananciaTotal - totalGastosOperativos
   const efectivoVentas = facturas.value.reduce((suma, factura) => suma + efectivoRecibidoFactura(factura), 0)
   const efectivoAbonos = abonosCuentas.value.reduce((suma, pago) => (
     suma + (metodoEsEfectivo(pago.metodo) ? toNumber(pago.monto) : 0)
@@ -371,7 +410,7 @@ const totales = computed(() => {
   ), 0)
   const tarjetaTaller = taller.value.reduce((suma, orden) => suma + recibidoTallerPorMetodo(orden, metodoEsTarjeta), 0)
   const tarjetaTotal = tarjetaVentas + tarjetaAbonos + tarjetaTaller
-  return { total, ganancia, gananciaTotal, gananciaNeta, descuento, porcentajeTarjeta, facturasTarjeta, count, tallerIngresos, tallerGanancia, tallerOrdenes, totalGastos, totalGastosEfectivo, totalGastosTransferencia, costo, margen, ticketPromedio, itemsPorFactura, itemsCount, efectivoVentas, efectivoAbonos, efectivoTaller, efectivoTotal, transferenciaVentas, transferenciaAbonos, transferenciaTaller, transferenciaTotal, tarjetaVentas, tarjetaAbonos, tarjetaTaller, tarjetaTotal }
+  return { total, ganancia, gananciaTotal, gananciaNeta, descuento, notasCreditoAplicadas, porcentajeTarjeta, facturasTarjeta, count, tallerValorOrdenes, tallerIngresos, tallerCobrado, tallerGanancia, tallerOrdenes, totalGastos, totalGastosOperativos, totalGastosTaller, totalGastosEfectivo, totalGastosTransferencia, costo, margen, ticketPromedio, itemsPorFactura, itemsCount, efectivoVentas, efectivoAbonos, efectivoTaller, efectivoTotal, transferenciaVentas, transferenciaAbonos, transferenciaTaller, transferenciaTotal, tarjetaVentas, tarjetaAbonos, tarjetaTaller, tarjetaTotal }
 })
 
 function parseProductos(productos: any): any[] {
@@ -398,6 +437,19 @@ function getProductoCostoUnitario(producto: any): number {
   )
 }
 
+function getProductoTotalBruto(producto: any): number {
+  return toNumber(producto?.total) || (
+    (toNumber(producto?.precio) || toNumber(producto?.precio_venta)) * getProductoCantidad(producto)
+  )
+}
+
+function factorDescuentoFactura(factura: any, productos: any[]): number {
+  const brutoProductos = productos.reduce((total, producto) => total + getProductoTotalBruto(producto), 0)
+  if (!(brutoProductos > 0)) return 1
+  const descuento = Math.min(brutoProductos, calcularDescuentoComercial(factura))
+  return (brutoProductos - descuento) / brutoProductos
+}
+
 function calcularCostoProductos(productos: any[]): number {
   return productos.reduce((sum: number, p: any) => (
     sum + (getProductoCostoUnitario(p) * getProductoCantidad(p))
@@ -405,8 +457,33 @@ function calcularCostoProductos(productos: any[]): number {
 }
 
 function calcularCostoFactura(factura: any): number {
+  const costoGuardado = toNumber(factura?.costo)
+  if (costoGuardado > 0) return costoGuardado
   const prods = parseProductos(factura.productos)
   return calcularCostoProductos(prods)
+}
+
+function calcularNotaCreditoAplicada(factura: any): number {
+  const nota = String(factura?.nota || '')
+  if (!/(?:^|\|)\s*NC\s*:/i.test(nota)) return 0
+  return Math.max(0, toNumber(factura?.descuento))
+}
+
+function calcularDescuentoComercial(factura: any): number {
+  return Math.max(0, toNumber(factura?.descuento) - calcularNotaCreditoAplicada(factura))
+}
+
+function calcularVentaFactura(factura: any): number {
+  return toNumber(factura?.total) + calcularNotaCreditoAplicada(factura)
+}
+
+function calcularGananciaFactura(factura: any): number {
+  const gananciaAntesDescuento = toNumber(factura?.ganancia)
+  const descuentoAplicado = calcularDescuentoComercial(factura)
+  if (gananciaAntesDescuento !== 0 || descuentoAplicado > 0) {
+    return gananciaAntesDescuento - descuentoAplicado
+  }
+  return toNumber(factura?.total) - calcularCostoFactura(factura)
 }
 
 function calcularRecargoTarjetaFactura(factura: any): number {
@@ -428,11 +505,12 @@ const topProductos = computed(() => {
   const mapa = new Map<string, { nombre: string; cantidad: number; total: number; costo: number }>()
   for (const f of facturas.value) {
     const prods = parseProductos(f.productos)
+    const factorDescuento = factorDescuentoFactura(f, prods)
     for (const p of prods) {
       const key = p.codigo || p.nombre || 'SIN NOMBRE'
       const entry = mapa.get(key) || { nombre: p.nombre || 'SIN NOMBRE', cantidad: 0, total: 0, costo: 0 }
       entry.cantidad += toNumber(p.cantidad)
-      entry.total += toNumber(p.total) || (toNumber(p.precio) * toNumber(p.cantidad))
+      entry.total += getProductoTotalBruto(p) * factorDescuento
       entry.costo += toNumber(p.costo) * toNumber(p.cantidad)
       mapa.set(key, entry)
     }
@@ -446,6 +524,7 @@ const productosVendidos = computed(() => {
   const items: any[] = []
   for (const f of facturas.value) {
     const prods = parseProductos(f.productos)
+    const factorDescuento = factorDescuentoFactura(f, prods)
     for (const p of prods) {
       items.push({
         no_factura: f.no_factura,
@@ -455,7 +534,7 @@ const productosVendidos = computed(() => {
         cantidad: toNumber(p.cantidad),
         precio: toNumber(p.precio) || toNumber(p.precio_venta) || 0,
         costo: toNumber(p.costo) || 0,
-        total: toNumber(p.total) || ((toNumber(p.precio) || toNumber(p.precio_venta) || 0) * toNumber(p.cantidad)),
+        total: getProductoTotalBruto(p) * factorDescuento,
         almacen_id: f.almacen_id || 0,
         almacen_uid: f.almacen_uid || '',
       })
@@ -472,11 +551,12 @@ const ventasPorCategoria = computed(() => {
   const mapa = new Map<string, { categoria: string; cantidad: number; total: number; costo: number }>()
   for (const f of facturas.value) {
     const prods = parseProductos(f.productos)
+    const factorDescuento = factorDescuentoFactura(f, prods)
     for (const p of prods) {
       const cat = p.categoria || p.tipo || 'SIN CATEGORIA'
       const entry = mapa.get(cat) || { categoria: cat, cantidad: 0, total: 0, costo: 0 }
       entry.cantidad += toNumber(p.cantidad)
-      entry.total += toNumber(p.total) || ((toNumber(p.precio) || toNumber(p.precio_venta) || 0) * toNumber(p.cantidad))
+      entry.total += getProductoTotalBruto(p) * factorDescuento
       entry.costo += (toNumber(p.costo) || 0) * toNumber(p.cantidad)
       mapa.set(cat, entry)
     }
@@ -489,8 +569,8 @@ const ventasPorVendedor = computed(() => {
   for (const f of facturas.value) {
     const vendedor = f.vendedor || 'SIN VENDEDOR'
     const entry = mapa.get(vendedor) || { vendedor, total: 0, ganancia: 0, count: 0 }
-    entry.total += toNumber(f.total)
-    entry.ganancia += toNumber(f.ganancia)
+    entry.total += calcularVentaFactura(f)
+    entry.ganancia += calcularGananciaFactura(f)
     entry.count++
     mapa.set(vendedor, entry)
   }
@@ -514,18 +594,25 @@ const datosPorDia = computed(() => {
     const fecha = fechaEfectivaFactura(f)
     if (mapa.has(fecha)) {
       const existing = mapa.get(fecha)!
-      existing.ventas += f.total || 0
-      existing.ganancia += f.ganancia || 0
+      existing.ventas += calcularVentaFactura(f)
+      existing.ganancia += calcularGananciaFactura(f)
     }
   }
 
   for (const t of taller.value) {
+    if (!esOrdenTallerContabilizable(t)) continue
     const fecha = getTallerFecha(t)
     if (mapa.has(fecha)) {
       const existing = mapa.get(fecha)!
       existing.ventas += getTallerTotal(t)
-      existing.ganancia += getTallerGanancia(t)
+      existing.ganancia += getTallerTotal(t)
     }
+  }
+
+  for (const g of gastos.value) {
+    if (!esGastoTaller(g)) continue
+    const existing = mapa.get(getGastoFecha(g))
+    if (existing) existing.ganancia -= toNumber(g.cantidad || g.monto)
   }
 
   return Array.from(mapa.entries()).map(([fecha, datos]) => ({ fecha, ...datos }))
@@ -545,13 +632,20 @@ const datosTallerDiario = computed(() => {
   }
 
   for (const t of taller.value) {
+    if (!esOrdenTallerContabilizable(t)) continue
     const fecha = getTallerFecha(t)
     if (mapa.has(fecha)) {
       const existing = mapa.get(fecha)!
       existing.ingresos += getTallerTotal(t)
-      existing.ganancia += getTallerGanancia(t)
+      existing.ganancia += getTallerTotal(t)
       existing.count++
     }
+  }
+
+  for (const g of gastos.value) {
+    if (!esGastoTaller(g)) continue
+    const existing = mapa.get(getGastoFecha(g))
+    if (existing) existing.ganancia -= toNumber(g.cantidad || g.monto)
   }
 
   return Array.from(mapa.entries()).map(([fecha, datos]) => ({ fecha, ...datos }))
@@ -565,12 +659,12 @@ const datosTallerEstados = computed(() => {
     mapa.set(estado, { estado, label: labelEstadoTaller(estado), count: 0, ingresos: 0, ganancia: 0 })
   }
 
-  for (const orden of tallerTodas.value) {
+  for (const orden of taller.value) {
     const estado = normalizarEstadoTaller(orden.estado)
     const item = mapa.get(estado) || { estado, label: labelEstadoTaller(estado), count: 0, ingresos: 0, ganancia: 0 }
     item.count++
     item.ingresos += getTallerTotal(orden)
-    item.ganancia += getTallerGanancia(orden)
+    item.ganancia += esOrdenTallerContabilizable(orden) ? getTallerTotal(orden) : 0
     mapa.set(estado, item)
   }
 
@@ -605,8 +699,8 @@ const topClientes = computed(() => {
     const cod = f.cod_cliente || ''
     const key = cod || f.nombre_cliente || 'CONSUMIDOR FINAL'
     const entry = mapa.get(key) || { total: 0, ganancia: 0, count: 0 }
-    entry.total += f.total || 0
-    entry.ganancia += f.ganancia || 0
+    entry.total += calcularVentaFactura(f)
+    entry.ganancia += calcularGananciaFactura(f)
     entry.count++
     mapa.set(key, entry)
   }
@@ -707,7 +801,7 @@ function crearCharts() {
         labels: labels.value,
         datasets: [
           {
-            label: 'Ingresos (ventas + taller)',
+            label: 'Facturado (ventas + taller)',
             data: dataVentas.value,
             backgroundColor: 'rgba(59, 130, 246, 0.7)',
             borderColor: 'rgb(59, 130, 246)',
@@ -892,8 +986,8 @@ function crearCharts() {
                 const item = datosTallerEstados.value[context.dataIndex]
                 if (!item) return ''
                 return [
-                  `Ingresos: ${getSystemCurrencyCode()} ${formatCurrency(item.ingresos)}`,
-                  `Ganancia: ${getSystemCurrencyCode()} ${formatCurrency(item.ganancia)}`,
+                  `Valor ordenes: ${getSystemCurrencyCode()} ${formatCurrency(item.ingresos)}`,
+                  `Valor contabilizable: ${getSystemCurrencyCode()} ${formatCurrency(item.ganancia)}`,
                 ]
               },
             },
@@ -965,13 +1059,18 @@ async function generarReportePDF() {
     { label: 'Ganancia Neta', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.gananciaNeta)}`, color: [8, 145, 178] as [number, number, number] },
     { label: 'Ganancia de ventas', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.ganancia)}`, color: [5, 150, 105] as [number, number, number] },
     { label: 'Costo Ventas', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.costo)}`, color: [251, 146, 60] as [number, number, number] },
-    { label: 'Descuentos', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.descuento)}`, color: [245, 158, 11] as [number, number, number] },
+    { label: 'Descuentos comerciales', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.descuento)}`, color: [245, 158, 11] as [number, number, number] },
+    { label: 'Notas credito aplicadas', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.notasCreditoAplicadas)}`, color: [217, 119, 6] as [number, number, number] },
     { label: 'Recargos Tarjeta', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.porcentajeTarjeta)}`, color: [37, 99, 235] as [number, number, number] },
     { label: 'Facturas', value: `${totales.value.count}`, color: [124, 58, 237] as [number, number, number] },
-    { label: 'Taller Ingresos', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerIngresos)}`, color: [6, 182, 212] as [number, number, number] },
-    { label: 'Taller Ganancia', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerGanancia)}`, color: [225, 29, 72] as [number, number, number] },
+    { label: 'Valor Ordenes Taller', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerValorOrdenes)}`, color: [6, 182, 212] as [number, number, number] },
+    { label: 'Taller Facturado', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerIngresos)}`, color: [14, 165, 233] as [number, number, number] },
+    { label: 'Taller Cobrado', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerCobrado)}`, color: [124, 58, 237] as [number, number, number] },
+    { label: 'Ganancia Taller', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.tallerGanancia)}`, color: [225, 29, 72] as [number, number, number] },
     { label: 'Ordenes Taller', value: `${totales.value.tallerOrdenes}`, color: [14, 165, 233] as [number, number, number] },
-    { label: 'Gastos', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastos)}`, color: [220, 38, 38] as [number, number, number] },
+    { label: 'Gastos Totales', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastos)}`, color: [220, 38, 38] as [number, number, number] },
+    { label: 'Gastos Operativos', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastosOperativos)}`, color: [239, 68, 68] as [number, number, number] },
+    { label: 'Gastos de Taller', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastosTaller)}`, color: [225, 29, 72] as [number, number, number] },
     { label: 'Gastos Efectivo', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastosEfectivo)}`, color: [234, 88, 12] as [number, number, number] },
     { label: 'Gastos Transfer.', value: `${getSystemCurrencyCode()} ${formatCurrency(totales.value.totalGastosTransferencia)}`, color: [147, 51, 234] as [number, number, number] },
     { label: 'Margen %', value: `${totales.value.margen.toFixed(1)}%`, color: [13, 148, 136] as [number, number, number] },
@@ -993,7 +1092,7 @@ async function generarReportePDF() {
   // Charts as images
   const chartCanvases = [
     { ref: canvasDiario.value, label: 'Ingresos Diarios' },
-    { ref: canvasPago.value, label: 'Por Metodo de Pago' },
+    { ref: canvasPago.value, label: 'Ventas por Metodo de Pago' },
     { ref: canvasTaller.value, label: 'Taller' },
     { ref: canvasTopClientes.value, label: 'Top 10 Clientes' },
     { ref: canvasTopProductos.value, label: 'Top 10 Productos' },
@@ -1032,8 +1131,8 @@ async function generarReportePDF() {
       f.nombre_cliente || '',
       f.metodo_pago || '',
       `${getSystemCurrencyCode()} ${formatCurrency(calcularCostoFactura(f))}`,
-      `${getSystemCurrencyCode()} ${formatCurrency(f.total)}`,
-      `${getSystemCurrencyCode()} ${formatCurrency(f.ganancia)}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(calcularVentaFactura(f))}`,
+      `${getSystemCurrencyCode()} ${formatCurrency(calcularGananciaFactura(f))}`,
     ]),
     theme: 'striped',
     headStyles: { fillColor: [37, 99, 235], fontSize: 8 },
@@ -1095,7 +1194,24 @@ async function generarReportePDF() {
 
   autoTable(doc, {
     startY: (doc as any).lastAutoTable.finalY + 8,
-    head: [[...(mostrarAlmacen ? ['Almacén'] : []), 'Orden', 'Fecha', 'Cliente', 'Tecnico', 'Estado', 'Total', 'Ganancia']],
+    head: [[...(mostrarAlmacen ? ['Almacén'] : []), 'Gasto de Taller', 'Fecha', 'Metodo', 'Banco', 'Monto']],
+    body: gastosTaller.value.map((gasto: any) => [
+      ...(mostrarAlmacen ? [nombreAlmacen(gasto)] : []),
+      descripcionGastoTaller(gasto),
+      `${getGastoFecha(gasto)} ${gasto.hora || ''}`.trim(),
+      gasto.metodo_pago || 'EFECTIVO',
+      gasto.banco_nombre || '',
+      `${getSystemCurrencyCode()} ${formatCurrency(gasto.cantidad || gasto.monto)}`,
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [225, 29, 72], fontSize: 8 },
+    bodyStyles: { fontSize: 7 },
+    styles: { cellPadding: 2 },
+  })
+
+  autoTable(doc, {
+    startY: (doc as any).lastAutoTable.finalY + 8,
+    head: [[...(mostrarAlmacen ? ['Almacén'] : []), 'Orden', 'Fecha', 'Cliente', 'Tecnico', 'Estado', 'Total']],
     body: tallerFiltrado.value.map((t: any) => [
       ...(mostrarAlmacen ? [nombreAlmacen(t)] : []),
       t.no_orden || t.no_factura || '',
@@ -1104,7 +1220,6 @@ async function generarReportePDF() {
       t.tecnico || '',
       t.estado || '',
       `${getSystemCurrencyCode()} ${formatCurrency(getTallerTotal(t))}`,
-      `${getSystemCurrencyCode()} ${formatCurrency(getTallerGanancia(t))}`,
     ]),
     theme: 'striped',
     headStyles: { fillColor: [6, 182, 212], fontSize: 8 },
@@ -1220,14 +1335,20 @@ onMounted(async () => {
         <div class="report-kpi">
           <p class="text-emerald-100 text-xs font-semibold">Ganancia del periodo</p>
           <p class="text-xl font-bold">{{ $formatMoney(totales.gananciaTotal) }}</p>
+          <p class="text-[10px] text-emerald-100 mt-1">Ganancia ventas + ganancia taller</p>
         </div>
         <div class="report-kpi">
           <p class="text-orange-100 text-xs font-semibold">Costo Ventas</p>
           <p class="text-xl font-bold">{{ $formatMoney(totales.costo) }}</p>
         </div>
         <div class="report-kpi">
-          <p class="text-amber-100 text-xs font-semibold">Descuentos</p>
+          <p class="text-amber-100 text-xs font-semibold">Descuentos comerciales</p>
           <p class="text-xl font-bold">{{ $formatMoney(totales.descuento) }}</p>
+        </div>
+        <div class="report-kpi">
+          <p class="text-amber-100 text-xs font-semibold">Notas de credito aplicadas</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.notasCreditoAplicadas) }}</p>
+          <p class="text-[10px] text-amber-100 mt-1">Equipos recibidos como parte de pago</p>
         </div>
         <div class="report-kpi">
           <p class="text-blue-100 text-xs font-semibold">Recargos de Tarjeta</p>
@@ -1239,20 +1360,38 @@ onMounted(async () => {
           <p class="text-xl font-bold">{{ totales.count }}</p>
         </div>
         <div class="report-kpi">
-          <p class="text-cyan-100 text-xs font-semibold">Taller Ingresos</p>
-          <p class="text-xl font-bold">{{ $formatMoney(totales.tallerIngresos) }}</p>
+          <p class="text-cyan-100 text-xs font-semibold">Valor Ordenes Taller</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.tallerValorOrdenes) }}</p>
         </div>
         <div class="report-kpi">
-          <p class="text-rose-100 text-xs font-semibold">Taller Ganancia</p>
+          <p class="text-sky-100 text-xs font-semibold">Taller Facturado</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.tallerIngresos) }}</p>
+          <p class="text-[10px] text-sky-100 mt-1">Ordenes no canceladas del periodo</p>
+        </div>
+        <div class="report-kpi">
+          <p class="text-violet-100 text-xs font-semibold">Taller Cobrado</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.tallerCobrado) }}</p>
+        </div>
+        <div class="report-kpi">
+          <p class="text-rose-100 text-xs font-semibold">Ganancia Taller</p>
           <p class="text-xl font-bold">{{ $formatMoney(totales.tallerGanancia) }}</p>
+          <p class="text-[10px] text-rose-100 mt-1">Taller facturado - gastos de taller</p>
         </div>
         <div class="report-kpi">
           <p class="text-sky-100 text-xs font-semibold">Ordenes Taller</p>
           <p class="text-xl font-bold">{{ totales.tallerOrdenes }}</p>
         </div>
         <div class="report-kpi">
-          <p class="text-red-100 text-xs font-semibold">Gastos</p>
+          <p class="text-red-100 text-xs font-semibold">Gastos Totales</p>
           <p class="text-xl font-bold">{{ $formatMoney(totales.totalGastos) }}</p>
+        </div>
+        <div class="report-kpi">
+          <p class="text-red-100 text-xs font-semibold">Gastos Operativos</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.totalGastosOperativos) }}</p>
+        </div>
+        <div class="report-kpi">
+          <p class="text-rose-100 text-xs font-semibold">Gastos de Taller</p>
+          <p class="text-xl font-bold">{{ $formatMoney(totales.totalGastosTaller) }}</p>
         </div>
         <div class="report-kpi">
           <p class="text-orange-100 text-xs font-semibold">Gastos Efectivo</p>
@@ -1277,12 +1416,12 @@ onMounted(async () => {
         <div class="report-kpi">
           <p class="text-teal-100 text-xs font-semibold">Ganancia de ventas</p>
           <p class="text-xl font-bold">{{ $formatMoney(totales.ganancia) }}</p>
-          <p class="text-[10px] text-teal-100 mt-1">Solo facturas</p>
+          <p class="text-[10px] text-teal-100 mt-1">Incluye notas de credito; resta descuentos comerciales</p>
         </div>
         <div class="report-kpi">
           <p class="text-cyan-100 text-xs font-semibold">Ganancia Neta</p>
           <p class="text-xl font-bold">{{ $formatMoney(totales.gananciaNeta) }}</p>
-          <p class="text-[10px] text-cyan-100 mt-1">Ventas - Gastos efectivo</p>
+          <p class="text-[10px] text-cyan-100 mt-1">Ganancia ventas + taller - todos los gastos</p>
         </div>
       </div>
 
@@ -1295,7 +1434,7 @@ onMounted(async () => {
           </div>
         </div>
         <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-0 dark:bg-surface-800 p-4">
-          <h4 class="text-sm font-semibold mb-3">Por Metodo de Pago</h4>
+          <h4 class="text-sm font-semibold mb-3">Ventas por Metodo de Pago</h4>
           <div v-if="loading" class="h-48 flex items-center justify-center text-surface-400 text-sm">Cargando...</div>
           <div v-else class="h-48">
             <canvas ref="canvasPago"></canvas>
@@ -1383,7 +1522,7 @@ onMounted(async () => {
               <template #body="{ data }">{{ $formatMoney(data.total) }}</template>
             </Column>
             <Column field="ganancia" header="Ganancia" sortable style="width: 8rem">
-              <template #body="{ data }"><span class="text-emerald-600 font-semibold">{{ $formatMoney(data.ganancia) }}</span></template>
+              <template #body="{ data }"><span :class="data.ganancia >= 0 ? 'text-emerald-600' : 'text-red-500'" class="font-semibold">{{ $formatMoney(data.ganancia) }}</span></template>
             </Column>
             <template #empty>
               <div class="text-center py-6 text-surface-400">Sin datos de vendedor.</div>
@@ -1460,19 +1599,61 @@ onMounted(async () => {
             <span class="text-orange-600 font-semibold">{{ $formatMoney(calcularCostoFactura(data)) }}</span>
           </template>
         </Column>
-        <Column field="total" header="Total" sortable style="width: 7rem">
+        <Column header="Valor venta" style="width: 7rem">
           <template #body="{ data }">
-            <span class="font-semibold">{{ $formatMoney(getTallerTotal(data)) }}</span>
+            <span class="font-semibold">{{ $formatMoney(calcularVentaFactura(data)) }}</span>
           </template>
         </Column>
-        <Column field="ganancia" header="Ganancia" sortable style="width: 7rem">
+        <Column header="Ganancia" style="width: 7rem">
           <template #body="{ data }">
-            <span :class="data.ganancia >= 0 ? 'text-emerald-600 font-semibold' : 'text-red-500'">{{ $formatMoney(data.ganancia) }}</span>
+            <span :class="calcularGananciaFactura(data) >= 0 ? 'text-emerald-600 font-semibold' : 'text-red-500'">{{ $formatMoney(calcularGananciaFactura(data)) }}</span>
           </template>
         </Column>
 
         <template #empty>
           <div class="text-center py-6 text-surface-400">No hay facturas en este rango.</div>
+        </template>
+      </DataTable>
+
+      <div class="flex items-center justify-between gap-3 mt-6 mb-2">
+        <h4 class="text-sm font-semibold flex items-center gap-2">
+          <i class="pi pi-wrench text-rose-500"></i>
+          Gastos de Taller
+        </h4>
+        <span class="text-sm font-bold text-rose-600">Total: {{ $formatMoney(totales.totalGastosTaller) }}</span>
+      </div>
+      <DataTable
+        :value="gastosTaller"
+        :loading="loading"
+        stripedRows
+        paginator
+        :rows="10"
+        :rowsPerPageOptions="[10, 25, 50]"
+        dataKey="id"
+        responsiveLayout="scroll"
+        sortField="fecha"
+        :sortOrder="-1"
+      >
+        <Column v-if="almacenFiltro === TODOS_ALMACENES" header="Almacén" sortable style="width: 10rem">
+          <template #body="{ data }">{{ nombreAlmacen(data) }}</template>
+        </Column>
+        <Column header="Fecha" sortable style="width: 10rem">
+          <template #body="{ data }">{{ getGastoFecha(data) }} {{ data.hora || '' }}</template>
+        </Column>
+        <Column header="Descripción" sortable>
+          <template #body="{ data }">{{ descripcionGastoTaller(data) }}</template>
+        </Column>
+        <Column field="metodo_pago" header="Método" sortable style="width: 9rem" />
+        <Column field="banco_nombre" header="Banco" sortable style="width: 10rem">
+          <template #body="{ data }">{{ data.banco_nombre || '-' }}</template>
+        </Column>
+        <Column field="cantidad" header="Monto" sortable style="width: 8rem">
+          <template #body="{ data }">
+            <span class="font-semibold text-rose-600">{{ $formatMoney(data.cantidad || data.monto) }}</span>
+          </template>
+        </Column>
+        <template #empty>
+          <div class="text-center py-6 text-surface-400">No hay gastos de taller en este rango.</div>
         </template>
       </DataTable>
 
@@ -1503,14 +1684,9 @@ onMounted(async () => {
         <Column field="nombre" header="Cliente" sortable />
         <Column field="tecnico" header="Tecnico" sortable style="width: 10rem" />
         <Column field="estado" header="Estado" sortable style="width: 9rem" />
-        <Column field="total" header="Total" sortable style="width: 7rem">
+        <Column header="Total" style="width: 7rem">
           <template #body="{ data }">
-            <span class="font-semibold">{{ $formatMoney(data.total) }}</span>
-          </template>
-        </Column>
-        <Column header="Ganancia" sortable style="width: 7rem">
-          <template #body="{ data }">
-            <span class="text-emerald-600 font-semibold">{{ $formatMoney(getTallerGanancia(data)) }}</span>
+            <span class="font-semibold">{{ $formatMoney(getTallerTotal(data)) }}</span>
           </template>
         </Column>
 

@@ -265,6 +265,10 @@ function handleKeyDown(e: KeyboardEvent) {
   }
 }
 
+function abrirBusquedaGlobal() {
+  window.dispatchEvent(new CustomEvent('global-search:open'))
+}
+
 const navItems: { label: string; icon: string; to: string; permiso: string }[] = [
   { label: 'Home', icon: 'pi pi-home', to: '/', permiso: 'home' },
   { label: 'Inventario', icon: 'pi pi-box', to: '/inventario', permiso: 'inventario' },
@@ -377,7 +381,7 @@ onUnmounted(() => {
         </div>
 
         <div class="topbar-end">
-          <button class="action-btn search-trigger" type="button" title="Búsqueda universal (⌘K / Ctrl+K)" @click="window.dispatchEvent(new CustomEvent('global-search:open'))">
+          <button class="action-btn search-trigger" type="button" title="Búsqueda universal (⌘K / Ctrl+K)" @click="abrirBusquedaGlobal">
             <i class="pi pi-search action-icon"></i>
             <span class="search-shortcut hidden xl:inline">⌘K</span>
           </button>
@@ -758,6 +762,7 @@ onUnmounted(() => {
 .search-trigger {
   border-color: var(--topbar-border, rgba(203, 213, 225, 0.72));
   background: var(--topbar-hover-bg, rgba(255, 255, 255, 0.52));
+  cursor: pointer;
 }
 
 .search-shortcut {

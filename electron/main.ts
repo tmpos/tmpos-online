@@ -317,7 +317,7 @@ async function fetchOnlineTable(tableValue: unknown): Promise<any[]> {
 
 const ONLINE_IMAGE_METADATA_TABLE = 'datos_config'
 const ONLINE_IMAGE_PREFIX = '__tmpos_imagen__:'
-const ONLINE_IMAGE_TABLES = new Set(['accesorios', 'telefonos', 'electrodomesticos', 'piezas'])
+const ONLINE_IMAGE_TABLES = new Set(['accesorios', 'telefonos', 'electrodomesticos', 'piezas', 'clientes', 'usuarios'])
 
 function onlineImageKey(table: string, rowKey: unknown): string {
   return `${ONLINE_IMAGE_PREFIX}${table}:${String(rowKey || '')}`
@@ -335,6 +335,7 @@ async function saveOnlineImage(table: string, rowKey: unknown, image: unknown): 
   try { metadata = await fetchOnlineTable(ONLINE_IMAGE_METADATA_TABLE) }
   catch { metadata = [] }
   const current = metadata.find(row => String(row.nombre || '') === name)
+  invalidateOnlineTable(ONLINE_IMAGE_METADATA_TABLE)
   const value = String(image || '')
   if (!value) {
     if (current) await onlineCloudRequest(`/${ONLINE_IMAGE_METADATA_TABLE}/${encodeURIComponent(String(current.uid || current.id))}`, { method: 'DELETE' })
