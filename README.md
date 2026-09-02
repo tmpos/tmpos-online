@@ -1,14 +1,14 @@
 # TMPOS Desktop
 
-[![Versión](https://img.shields.io/badge/versión-2.14.1-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.1)
-[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.14.1/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.14.1)
+[![Versión](https://img.shields.io/badge/versión-2.15.0-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.15.0)
+[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.15.0/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.15.0)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows)](https://github.com/tmpos/tmpos-online/releases/latest)
 
 Sistema profesional de punto de venta, inventario, facturación, taller y administración comercial, con funcionamiento offline y sincronización mediante TMCloud.
 
 ## Descargar TMPOS para Windows
 
-[![Descargar TMPOS v2.14.0 para Windows](https://img.shields.io/badge/Descargar_TMPOS-v2.14.0_Windows-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/download/v2.14.0/TMPOS.Setup.2.14.0.exe)
+[![Descargar TMPOS v2.15.0 para Windows](https://img.shields.io/badge/Descargar_TMPOS-v2.15.0_Windows-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/download/v2.15.0/TMPOS.Setup.2.15.0.exe)
 
 El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos existentes se conservan durante la actualización.
 
@@ -19,6 +19,12 @@ El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos ex
 Compatible con Macs Intel de 64 bits. Al no estar notarizada esta compilación, la primera apertura puede requerir clic derecho sobre TMPOS, seleccionar **Abrir** y confirmar.
 
 También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-online/releases/download/v2.14.1/TMPOS-2.14.1-x64.zip).
+
+## Novedades de v2.15.0
+
+- Nueva Nota de Crédito Electrónica (e-CF 34) en Contabilidad: emite notas de crédito reales ante la DGII contra facturas de crédito fiscal o consumo electrónico ya aceptadas, con reintento de envío y bloqueo de eliminación una vez aceptadas.
+- Cuentas por Cobrar y su edición ahora muestran el IMEI (o serial), color y capacidad de cada producto facturado, tanto en pantalla como en el PDF del estado de cuenta.
+- Corrección: en Teléfonos, la tarjeta no mostraba el listado de IMEI al voltearla con clic derecho; ahora funciona igual que en el POS.
 
 ## Novedades de v2.14.1
 
@@ -174,7 +180,7 @@ También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/t
 
 ## Actualización
 
-1. Descarga `TMPOS.Setup.2.14.0.exe`.
+1. Descarga `TMPOS.Setup.2.15.0.exe`.
 2. Cierra TMPOS si está abierto.
 3. Ejecuta el instalador y conserva la ubicación actual.
 4. Abre TMPOS normalmente; tus datos locales permanecerán disponibles.
