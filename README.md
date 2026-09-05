@@ -1,14 +1,14 @@
 # TMPOS Desktop
 
-[![Versión](https://img.shields.io/badge/versión-2.15.1-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v2.15.1)
-[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v2.15.1/total)](https://github.com/tmpos/tmpos-online/releases/tag/v2.15.1)
+[![Versión](https://img.shields.io/badge/versión-3.0.0-2563eb)](https://github.com/tmpos/tmpos-online/releases/tag/v3.0.0)
+[![Descargas](https://img.shields.io/github/downloads/tmpos/tmpos-online/v3.0.0/total)](https://github.com/tmpos/tmpos-online/releases/tag/v3.0.0)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?logo=windows)](https://github.com/tmpos/tmpos-online/releases/latest)
 
 Sistema profesional de punto de venta, inventario, facturación, taller y administración comercial, con funcionamiento offline y sincronización mediante TMCloud.
 
 ## Descargar TMPOS para Windows
 
-[![Descargar TMPOS v2.15.1 para Windows](https://img.shields.io/badge/Descargar_TMPOS-v2.15.1_Windows-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/download/v2.15.1/TMPOS.Setup.2.15.1.exe)
+[![Descargar TMPOS v3.0.0 para Windows](https://img.shields.io/badge/Descargar_TMPOS-v3.0.0_Windows-16a34a?style=for-the-badge&logo=windows)](https://github.com/tmpos/tmpos-online/releases/download/v3.0.0/TMPOS.Setup.3.0.0.exe)
 
 El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos existentes se conservan durante la actualización.
 
@@ -19,6 +19,18 @@ El instalador es compatible con Windows 10 y Windows 11 de 64 bits. Los datos ex
 Compatible con Macs Intel de 64 bits. Al no estar notarizada esta compilación, la primera apertura puede requerir clic derecho sobre TMPOS, seleccionar **Abrir** y confirmar.
 
 También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/tmpos-online/releases/download/v2.14.1/TMPOS-2.14.1-x64.zip).
+
+## Novedades de v3.0.0
+
+- Nuevo sistema de comisiones por vendedor, con reglas porcentuales, montos fijos y comisiones especificas por producto.
+- Liquidacion de comisiones por usuario y rango de fechas, PDF profesional embebido y reasignacion del vendedor de una factura.
+- Registro de amonestaciones generales y economicas, seguimiento de montos pendientes o aplicados, filtros por fecha y constancias PDF.
+- Los vendedores envian las ventas a espera; solamente Caja, Administrador o Soporte pueden completar el cobro.
+- Caja permite iniciar turnos con monto inicial de cero y protege los turnos abiertos frente a usuarios vendedores.
+- Facturas y cotizaciones incluyen filtros mejorados y muestran primero los registros mas recientes.
+- Cuentas por Cobrar incorpora filtros por cliente, estado, venta, vencimiento y saldo, con totales dinamicos y deteccion de atrasos.
+- Integracion de WhatsApp corregida en Facturas y Cuentas por Cobrar, incluyendo captura del numero faltante.
+- Mejoras de carga de imagenes, sincronizacion, permisos y compatibilidad entre Electron, navegador y dispositivos moviles.
 
 ## Novedades de v2.15.1
 
@@ -191,7 +203,7 @@ También está disponible el archivo [ZIP para macOS](https://github.com/tmpos/t
 
 ## Actualización
 
-1. Descarga `TMPOS.Setup.2.15.1.exe`.
+1. Descarga `TMPOS.Setup.3.0.0.exe`.
 2. Cierra TMPOS si está abierto.
 3. Ejecuta el instalador y conserva la ubicación actual.
 4. Abre TMPOS normalmente; tus datos locales permanecerán disponibles.

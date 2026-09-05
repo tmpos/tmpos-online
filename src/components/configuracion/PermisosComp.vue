@@ -11,7 +11,7 @@ import { useToast } from 'primevue/usetoast'
 import { useAuthStore } from '@/stores/auth.store'
 import { useSystemModeStore } from '@/stores/systemMode'
 import { USER_PERMISSION_GROUPS, getDefaultUserPermissions, getUserPermissionOptions, parseUserPermissions } from '@/config/userPermissions'
-import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
+
 
 const toast = useToast()
 const auth = useAuthStore()
@@ -60,20 +60,7 @@ async function guardarPermisos() {
         ;(auth.user as any).permisos = data.permisos
       }
 
-      let sincronizado = true
-      if (isOnline()) {
-        const cloud = await pushLocalRowToCloud('usuarios', Number(selectedUser.value.id))
-        sincronizado = cloud.success
-      }
-
-      toast.add({
-        severity: sincronizado ? 'success' : 'warn',
-        summary: sincronizado ? 'Exito' : 'Guardado localmente',
-        detail: sincronizado
-          ? 'Permisos actualizados'
-          : 'Los permisos se sincronizaran con TM Cloud en el proximo intento',
-        life: sincronizado ? 3000 : 5000,
-      })
+      toast.add({ severity: 'success', summary: 'Exito', detail: 'Permisos actualizados en la API', life: 3000 })
       dialogVisible.value = false
       await cargarUsuarios()
     } else {

@@ -10,6 +10,18 @@ export async function initCapacitorApp() {
   if (!db) {
     const dbApi: any = {
       getAll: (tabla: string) => Promise.resolve(dbGetAll(tabla)),
+      getCuadres: (options: { almacenUid?: string; limit?: number; desde?: string; hasta?: string } = {}) => {
+        const rows = dbGetAll('cuadres')
+        if (!rows.success) return Promise.resolve(rows)
+        const filtered = (rows.data || [])
+          .filter((row: any) => !options.almacenUid || !row.almacen_uid || String(row.almacen_uid) === options.almacenUid)
+          .filter((row: any) => {
+            const date = String(row.created_at || row.fecha || '').slice(0, 10)
+            return (!options.desde || date >= options.desde) && (!options.hasta || date <= options.hasta)
+          })
+          .sort((a: any, b: any) => String(b.created_at || b.fecha || '').localeCompare(String(a.created_at || a.fecha || '')))
+        return Promise.resolve({ success: true, data: options.limit ? filtered.slice(0, options.limit) : filtered })
+      },
       getWhere: (tabla: string, where: string, params: any[] = []) => Promise.resolve(dbGetWhere(tabla, where, params)),
       getModified: (tabla: string, desde: string) => Promise.resolve(dbGetModified(tabla, desde)),
       getById: (tabla: string, id: number) => Promise.resolve(dbGetById(tabla, id)),

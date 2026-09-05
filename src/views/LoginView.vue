@@ -42,8 +42,15 @@ function claveSoporteActual() {
   return `SP${h}${m}`
 }
 
+function usuarioActualEsCajero(): boolean {
+  return Boolean(auth.isCajero)
+}
+
 async function verificarTurnoCajero() {
-  const esCajero = auth.isCajero || auth.user?.nivel_seguridad?.toLowerCase() === 'cajero'
+  turnoDialogVisible.value = false
+  turnoAbiertoDialogVisible.value = false
+  turnoAbiertoData.value = null
+  const esCajero = usuarioActualEsCajero()
   console.log('[Login] Verificar turno cajero, rol:', auth.user?.rol, 'nivel:', auth.user?.nivel_seguridad, 'esCajero:', esCajero)
   if (esCajero) {
     console.log('[Login] Buscando turno abierto...')
@@ -64,6 +71,12 @@ async function verificarTurnoCajero() {
 }
 
 async function cerrarTurnoAnterior() {
+  if (!usuarioActualEsCajero()) {
+    turnoAbiertoDialogVisible.value = false
+    turnoAbiertoData.value = null
+    router.push('/vender')
+    return
+  }
   if (!turnoAbiertoData.value) return
   turnoLoading.value = true
   try {
@@ -80,23 +93,31 @@ async function cerrarTurnoAnterior() {
 }
 
 async function continuarTurnoAbierto() {
+  if (!usuarioActualEsCajero()) return
   turnoAbiertoDialogVisible.value = false
   turnoAbiertoData.value = null
   router.push('/vender')
 }
 
 async function abrirNuevoTurno() {
-  if (!turnoMontoInicial.value || turnoMontoInicial.value < 0) {
+  if (!usuarioActualEsCajero()) {
+    turnoDialogVisible.value = false
+    router.push('/vender')
+    return
+  }
+  const montoInicial = Number(turnoMontoInicial.value)
+  if (!Number.isFinite(montoInicial) || montoInicial < 0) {
     toast.add({ severity: 'warn', summary: 'Atencion', detail: 'Ingresa un monto inicial valido', life: 3000 })
     return
   }
   turnoLoading.value = true
   try {
-    await (window as any).electron.invoke('caja:abrirTurno', {
-      monto_inicial: turnoMontoInicial.value,
+    const resultado = await (window as any).electron.invoke('caja:abrirTurno', {
+      monto_inicial: montoInicial,
       usuario_id: auth.user?.id || 0,
       usuario_nombre: auth.user?.nombre || auth.user?.usuario || '',
     })
+    if (!resultado?.success) throw new Error(resultado?.error || 'No se pudo abrir el turno')
     turnoDialogVisible.value = false
     router.push('/vender')
   } catch (e: any) {
@@ -149,11 +170,14 @@ watch(mode, (val) => {
 
 async function validarAccesoSoporte() {
   soporteError.value = ''
-  if (!soporteClave.value.trim()) {
+  const claveIngresada = soporteClave.value.trim().toUpperCase()
+  if (!claveIngresada) {
     soporteError.value = 'Introduce la clave de soporte'
     return
   }
-  if (soporteClave.value.trim() !== claveSoporteActual()) {
+  const claveConPrefijo = claveSoporteActual()
+  const claveSinPrefijo = claveConPrefijo.replace(/^SP/, '')
+  if (claveIngresada !== claveConPrefijo && claveIngresada !== claveSinPrefijo) {
     soporteError.value = 'Clave incorrecta'
     return
   }
@@ -356,11 +380,11 @@ onUnmounted(() => {
         <div class="w-14 h-14 rounded-2xl flex items-center justify-center" style="background:var(--p-primary-500);">
           <i class="pi pi-shield text-2xl text-white"></i>
         </div>
-        <p class="text-sm text-surface-500 text-center">Introduce la clave de soporte</p>
+        <p class="text-sm text-surface-500 text-center">Introduce la hora actual en formato HHMM</p>
         <input
           v-model="soporteClave"
           type="password"
-          placeholder="SPHHMM"
+          placeholder="HHMM"
           class="w-full px-3 py-2.5 rounded-lg border border-surface-300 bg-surface-0 text-surface-900 text-sm placeholder-surface-400 focus:outline-none focus:ring-2 focus:ring-primary-500 text-center"
           @keydown.enter="validarAccesoSoporte"
         />
@@ -372,7 +396,7 @@ onUnmounted(() => {
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="turnoAbiertoDialogVisible" header="Turno Abierto" modal :style="{ width: 'min(24rem, 92vw)' }" :closable="false">
+    <Dialog v-if="usuarioActualEsCajero()" v-model:visible="turnoAbiertoDialogVisible" header="Turno Abierto" modal :style="{ width: 'min(24rem, 92vw)' }" :closable="false">
       <div class="flex flex-col items-center gap-4 pt-2">
         <div class="w-14 h-14 rounded-2xl flex items-center justify-center bg-amber-500/20">
           <i class="pi pi-exclamation-triangle text-2xl text-amber-500"></i>
@@ -386,7 +410,7 @@ onUnmounted(() => {
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="turnoDialogVisible" header="Iniciar Turno de Caja" modal :style="{ width: 'min(24rem, 92vw)' }" :closable="false">
+    <Dialog v-if="usuarioActualEsCajero()" v-model:visible="turnoDialogVisible" header="Iniciar Turno de Caja" modal :style="{ width: 'min(24rem, 92vw)' }" :closable="false">
       <div class="flex flex-col items-center gap-4 pt-2">
         <div class="w-14 h-14 rounded-2xl flex items-center justify-center" style="background:var(--p-primary-500);">
           <i class="pi pi-calculator text-2xl text-white"></i>

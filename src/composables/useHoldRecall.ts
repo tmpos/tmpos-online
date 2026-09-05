@@ -20,6 +20,8 @@ export interface VentaHold {
   total: number
   itemsCount: number
   usuario?: string
+  vendedorId?: number
+  vendedorNombre?: string
   syncPendiente?: boolean
 }
 
@@ -133,6 +135,8 @@ export function useHoldRecall() {
     nota: string,
     total: number,
     usuario = '',
+    vendedorId = 0,
+    vendedorNombre = '',
   ) {
     const ahora = new Date()
     const hold: VentaHold = {
@@ -151,6 +155,8 @@ export function useHoldRecall() {
       total,
       itemsCount: cart.reduce((s: number, i: any) => s + (i.cantidad || 1), 0),
       usuario,
+      vendedorId,
+      vendedorNombre,
     }
     const res = await window.db.insert(HOLDS_TABLE, {
       codigo: hold.id,
@@ -180,6 +186,8 @@ export function useHoldRecall() {
       descuentoValor: hold.descuentoValor,
       metodoPago: hold.metodoPago,
       nota: hold.nota,
+      vendedorId: Number(hold.vendedorId || 0),
+      vendedorNombre: String(hold.vendedorNombre || ''),
     }
   }
 

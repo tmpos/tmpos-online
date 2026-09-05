@@ -15,6 +15,7 @@ interface DbResponse<T = any> {
 
 interface DbAPI {
   getAll: (tabla: string) => Promise<DbResponse<any[]>>
+  getCuadres: (options?: { almacenUid?: string; limit?: number; desde?: string; hasta?: string }) => Promise<DbResponse<any[]>>
   getById: (tabla: string, id: number) => Promise<DbResponse<any>>
   insert: (tabla: string, data: Record<string, unknown>) => Promise<DbResponse<{ id: number }>>
   update: (tabla: string, id: number, data: Record<string, unknown>) => Promise<DbResponse>

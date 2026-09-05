@@ -14,8 +14,8 @@ import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import { useAuthStore } from '@/stores/auth.store'
 import { useSystemModeStore } from '@/stores/systemMode'
-import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
-import { ensureConfigLoaded, fetchTable, uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
+
+import { uploadImage, getImageUrl, deleteImage, isConnected as tmCloudConnected } from '@/services/tmCloudClient'
 import { USER_PERMISSION_GROUPS, getDefaultUserPermissions, getUserPermissionOptions, parseUserPermissions } from '@/config/userPermissions'
 
 import { envioElectron } from '@/funciones/funciones.js'
@@ -44,6 +44,13 @@ const selectedUsuarios = ref<any[]>([])
 const usuariosPendientesEliminar = ref<any[]>([])
 const busqueda = ref('')
 const pinDuplicado = ref(false)
+
+function normalizedUserRole(value: string): string {
+  const level = String(value || '').trim().toLowerCase()
+  if (level === 'usuario' || level === 'vendedor') return 'vendedor'
+  if (level === 'admin') return 'administrador'
+  return level || 'vendedor'
+}
 
 const roles = computed(() => {
   return [
@@ -138,6 +145,7 @@ function actualizarPermisosUsuarioActual(usuarioId: number, permisos: string, ro
   if (Number((auth.user as any)?.id || 0) === Number(usuarioId)) {
     ;(auth.user as any).permisos = permisos
     ;(auth.user as any).nivel_seguridad = rol
+    ;(auth.user as any).rol = normalizedUserRole(rol)
   }
 }
 
@@ -156,7 +164,7 @@ async function guardarImagenUsuario(imagen: string) {
   const local = usuarios.value.find((usuario: any) => usuario.id === selectedUsuario.value.id)
   if (local) local.imagen = imagen
   actualizarImagenUsuarioActual(Number(selectedUsuario.value.id), imagen)
-  if (isOnline()) await pushLocalRowToCloud('usuarios', selectedUsuario.value.id)
+
 }
 
 async function quitarImagen() {
@@ -250,46 +258,6 @@ async function cargarUsuarios() {
   } finally {
     loading.value = false
   }
-}
-
-function identificadoresUsuario(usuario: any): string[] {
-  return [
-    usuario?.uid,
-    usuario?.identificadordb,
-    usuario?.email,
-    usuario?.usuario,
-  ]
-    .map(valor => String(valor || '').trim().toLowerCase())
-    .filter(Boolean)
-}
-
-async function agregarUsuariosRemotosFaltantes(): Promise<number> {
-  if (!isOnline()) return 0
-  await ensureConfigLoaded()
-  const [resLocal, remotos] = await Promise.all([
-    window.db.getAll('usuarios'),
-    fetchTable('usuarios'),
-  ])
-  if (!resLocal.success || remotos.length === 0) return 0
-
-  const identificadoresLocales = new Set(
-    (resLocal.data || []).flatMap((usuario: any) => identificadoresUsuario(usuario)),
-  )
-  let agregados = 0
-  for (const remoto of remotos) {
-    const identificadores = identificadoresUsuario(remoto)
-    if (identificadores.some(id => identificadoresLocales.has(id))) continue
-    const normalizado = Object.fromEntries(
-      Object.entries(remoto)
-        .filter(([key]) => key !== 'id')
-        .map(([key, value]) => [key, value !== null && typeof value === 'object' ? JSON.stringify(value) : value]),
-    )
-    const res = await window.electron.invoke('db:insertCloud', 'usuarios', normalizado) as any
-    if (!res?.success) throw new Error(res?.error || `No se pudo importar ${remoto.nombre || remoto.email || 'un usuario'}`)
-    identificadores.forEach(id => identificadoresLocales.add(id))
-    agregados++
-  }
-  return agregados
 }
 
 function abrirCrear() {
@@ -485,6 +453,7 @@ async function guardar() {
       respuesta: selectedUsuario.value?.respuesta || '',
       fecha: selectedUsuario.value?.fecha || '',
       nivel_seguridad: form.value.rol,
+      rol: normalizedUserRole(form.value.rol),
       intentos_login: selectedUsuario.value?.intentos_login || '',
       estado: selectedUsuario.value?.estado || 'ACTIVADO',
       permisos: JSON.stringify(form.value.permisos),
@@ -511,31 +480,12 @@ async function guardar() {
       }
     }
 
-    if (usuarioId && isOnline()) {
-      const cloud = await pushLocalRowToCloud('usuarios', usuarioId)
-      if (!cloud.success) {
-        toast.add({
-          severity: 'warn',
-          summary: 'Guardado localmente',
-          detail: cloud.error || 'El usuario no pudo guardarse en la API; se reintentara en la proxima sincronizacion',
-          life: 5000,
-        })
-      } else {
-        toast.add({
-          severity: 'success',
-          summary: 'Exito',
-          detail: isEditing.value ? 'Usuario actualizado y sincronizado' : 'Usuario creado y sincronizado',
-          life: 3000,
-        })
-      }
-    } else {
-      toast.add({
-        severity: 'success',
-        summary: 'Exito',
-        detail: isEditing.value ? 'Usuario actualizado' : 'Usuario creado',
-        life: 3000,
-      })
-    }
+    toast.add({
+      severity: 'success',
+      summary: 'Exito',
+      detail: isEditing.value ? 'Usuario actualizado en la API' : 'Usuario creado en la API',
+      life: 3000,
+    })
 
     actualizarImagenUsuarioActual(usuarioId, data.imagen)
     actualizarPermisosUsuarioActual(usuarioId, data.permisos, data.nivel_seguridad)
@@ -598,15 +548,6 @@ onMounted(async () => {
     console.error('Error cargando configuracion:', error)
   }
 
-  try {
-    const agregados = await agregarUsuariosRemotosFaltantes()
-    if (agregados > 0) {
-      toast.add({ severity: 'success', summary: 'Usuarios sincronizados', detail: `${agregados} usuario(s) faltante(s) fueron agregados desde TM Cloud.`, life: 3000 })
-    }
-  } catch (error: any) {
-    console.error('Error verificando usuarios remotos:', error)
-    toast.add({ severity: 'warn', summary: 'Sincronización de usuarios', detail: error?.message || 'No se pudieron verificar los usuarios online.', life: 3500 })
-  }
   await cargarUsuarios()
 })
 </script>

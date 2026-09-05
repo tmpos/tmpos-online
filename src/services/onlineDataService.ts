@@ -4,7 +4,6 @@ import * as tmCloud from './tmCloudClient'
 type ApiResult<T = any> = { success: boolean; data?: T; error?: string; changes?: number }
 
 const LOCAL_TABLES = new Set([
-  'usuarios',
   'empresa',
   'tmcloud_config',
   'licencia',
@@ -20,12 +19,15 @@ const LOCAL_CHANNELS = new Set([
   'getServerUrl',
   'generate:pdf',
   'getPrinters',
+  'whatsapp:open',
   'scan:bluetooth',
   'db:clearEmpresaOnly',
   // Mantener solicitud y validacion dentro del runtime nativo. El servidor
   // remoto solo participa en el envio del mensaje mediante /otp/send.
   'facturas:solicitarOtpEliminar',
   'facturas:confirmarOtpEliminar',
+  'telefonos:solicitarOtpEliminar',
+  'telefonos:confirmarOtpEliminar',
 ])
 
 const installed = ref(false)
@@ -68,6 +70,25 @@ let cloudDataBatchScheduled = false
 let cloudSnapshotUnsupported = false
 const CLOUD_EXCLUDED_LOCAL_COLUMNS = new Set(['id', 'almacen_id', 'sync_status', 'last_synced_at', '_rowid'])
 const CLOUD_FALLBACK_SCHEMAS: Record<string, CloudColumnDefinition[]> = {
+  cuadres: [
+    { name: 'uid', type: 'TEXT' },
+    { name: 'fecha', type: 'TEXT' },
+    { name: 'turno_id', type: 'INTEGER', default: 0 },
+    { name: 'turno_usuario', type: 'TEXT' },
+    { name: 'monto_inicial', type: 'REAL', default: 0 },
+    { name: 'total_ventas', type: 'REAL', default: 0 },
+    { name: 'efectivo', type: 'REAL', default: 0 },
+    { name: 'tarjeta', type: 'REAL', default: 0 },
+    { name: 'transferencia', type: 'REAL', default: 0 },
+    { name: 'abonos_cxc', type: 'REAL', default: 0 },
+    { name: 'cantidad_abonos_cxc', type: 'INTEGER', default: 0 },
+    { name: 'total_gastos', type: 'REAL', default: 0 },
+    { name: 'saldo_final', type: 'REAL', default: 0 },
+    { name: 'observacion', type: 'TEXT' },
+    { name: 'almacen_uid', type: 'TEXT' },
+    { name: 'created_at', type: 'DATETIME' },
+    { name: 'updated_at', type: 'DATETIME' },
+  ],
   capacidades: [
     { name: 'uid', type: 'TEXT' },
     { name: 'nombre', type: 'TEXT' },
@@ -280,6 +301,30 @@ export async function ensureOnlineTable(tablaValue: string, data: Record<string,
   return check
 }
 
+function isMissingCloudTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return /table\s+not\s+found|tabla.+no\s+(?:existe|encontr)/i.test(message)
+}
+
+async function readCloudTable(tabla: string, path: string): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await cloudRequest(path)
+    } catch (error) {
+      if (!isMissingCloudTableError(error) || attempt >= 3) throw error
+
+      // El esquema de TMPBase puede anunciar una tabla justo antes de que el
+      // endpoint de datos termine de habilitarla. Desechar el esquema cacheado,
+      // volver a prepararla y reintentar evita mostrar "Table not found" al
+      // entrar por primera vez a modulos como Cuadre.
+      cloudSchemaCache = null
+      cloudSchemaChecks.delete(tabla)
+      await ensureOnlineTable(tabla)
+      await new Promise(resolve => setTimeout(resolve, 350 * (attempt + 1)))
+    }
+  }
+}
+
 async function fetchTableRowsIndividual(tabla: string): Promise<any[]> {
   await ensureOnlineTable(tabla)
   let rows: any[] = []
@@ -287,7 +332,7 @@ async function fetchTableRowsIndividual(tabla: string): Promise<any[]> {
   // TMPBASE moderno entrega el snapshot completo en una sola consulta y una
   // sola respuesta comprimible. Conservamos el recorrido paginado como
   // compatibilidad durante despliegues donde el servidor aun no se actualizo.
-  const snapshot = await cloudRequest(`/${encodeURIComponent(tabla)}?all=1&limit=100&page=1`)
+  const snapshot = await readCloudTable(tabla, `/${encodeURIComponent(tabla)}?all=1&limit=100&page=1`)
   if (!Array.isArray(snapshot?.data)) throw new Error(`TM Cloud devolvio una respuesta invalida para ${tabla}`)
   if (snapshot?.meta?.mode === 'all') {
     rows = snapshot.data
@@ -295,7 +340,7 @@ async function fetchTableRowsIndividual(tabla: string): Promise<any[]> {
     for (let page = 1; ; page++) {
       const response = page === 1
         ? snapshot
-        : await cloudRequest(`/${encodeURIComponent(tabla)}?page=${page}&limit=100`)
+        : await readCloudTable(tabla, `/${encodeURIComponent(tabla)}?page=${page}&limit=100`)
       if (!Array.isArray(response?.data)) throw new Error(`TM Cloud devolvio una respuesta invalida para ${tabla}`)
       const batch = response.data
       rows.push(...batch)
@@ -411,7 +456,9 @@ function fetchAllUncached(tabla: string): Promise<any[]> {
 }
 
 async function fetchAll(tabla: string): Promise<any[]> {
-  const cached = cloudDataCache.get(tabla)
+  // Usuarios contiene permisos de seguridad: siempre se consulta fresco y no
+  // se reutiliza una respuesta anterior cuando la API no esta disponible.
+  const cached = tabla === 'usuarios' ? undefined : cloudDataCache.get(tabla)
   if (cached && Date.now() - cached.fetchedAt < CLOUD_DATA_CACHE_TTL_MS) return cached.rows
   const pending = cloudDataFetches.get(tabla)
   if (pending) return pending
@@ -434,6 +481,32 @@ async function fetchAll(tabla: string): Promise<any[]> {
     .finally(() => cloudDataFetches.delete(tabla))
   cloudDataFetches.set(tabla, request)
   return request
+}
+
+type CuadresQuery = { almacenUid?: string; limit?: number; desde?: string; hasta?: string }
+
+async function fetchCuadres(query: CuadresQuery = {}): Promise<any[]> {
+  await ensureOnlineTable('cuadres')
+  const limit = query.desde || query.hasta ? 0 : Math.max(1, Math.min(Number(query.limit || 10), 100))
+  const pageSize = limit ? Math.max(25, limit) : 100
+  const rows: any[] = []
+
+  for (let page = 1; ; page++) {
+    const response = await readCloudTable('cuadres', `/cuadres?page=${page}&limit=${pageSize}`)
+    if (!Array.isArray(response?.data)) throw new Error('TM Cloud devolvio una respuesta invalida para cuadres')
+    const batch = response.data
+    rows.push(...batch.filter((row: any) => {
+      const sameStore = !query.almacenUid || !row.almacen_uid || String(row.almacen_uid) === String(query.almacenUid)
+      const date = String(row.created_at || row.fecha || '').slice(0, 10)
+      return sameStore && (!query.desde || date >= query.desde) && (!query.hasta || date <= query.hasta)
+    }))
+
+    const pages = Number(response?.meta?.pages || 0)
+    if ((limit && rows.length >= limit) || response?.meta?.mode === 'all' || (pages && page >= pages) || (!pages && batch.length < pageSize)) break
+  }
+
+  rows.sort((a, b) => String(b.created_at || b.fecha || '').localeCompare(String(a.created_at || a.fecha || '')))
+  return limit ? rows.slice(0, limit) : rows
 }
 
 function invalidateCloudData(tabla: string) {
@@ -556,6 +629,10 @@ export async function installOnlineDataService(): Promise<void> {
     getAll: async (tablaValue: string): Promise<ApiResult<any[]>> => {
       if (isLocalTable(tablaValue)) return localDb.getAll(tablaValue)
       try { return { success: true, data: await fetchAll(tableName(tablaValue)) } }
+      catch (error: any) { return { success: false, error: error.message } }
+    },
+    getCuadres: async (query: CuadresQuery = {}): Promise<ApiResult<any[]>> => {
+      try { return { success: true, data: await fetchCuadres(query) } }
       catch (error: any) { return { success: false, error: error.message } }
     },
     getWhere: async (tablaValue: string, where: string, params: any[] = []): Promise<ApiResult<any[]>> => {

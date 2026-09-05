@@ -46,8 +46,8 @@ describe('orden de descarga inicial de TM Cloud', () => {
     expect(isConfirmedCloudDelete({ tabla: 'usuarios', uid: 'usr-1', confirmado: 1 })).toBe(true)
   })
 
-  it('envia usuarios locales a la API incluso en modo solo-online', () => {
-    expect(shouldSkipOnlineOnlyRowPush('usuarios', true)).toBe(false)
+  it('no vuelve a subir usuarios locales cuando la API es la fuente unica', () => {
+    expect(shouldSkipOnlineOnlyRowPush('usuarios', true)).toBe(true)
     expect(shouldSkipOnlineOnlyRowPush('empresa', true)).toBe(false)
     expect(shouldSkipOnlineOnlyRowPush('clientes', true)).toBe(true)
     expect(shouldSkipOnlineOnlyRowPush('usuarios', false)).toBe(false)

@@ -5,11 +5,9 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 // descargan ni se sobrescriben mediante sincronizacion o realtime.
 const LOCAL_SYSTEM_TABLES = ['configuracion', 'tmcloud_config', 'sync_deletes', 'bitacora', 'licencia', 'correo', 'otp_local_config']
 const GLOBAL_BUSINESS_TABLES = new Set(['usuarios', 'bancos', 'banco_transacciones'])
-// En modo solo-online casi todas las tablas se escriben directamente mediante
-// onlineDataService y no necesitan un segundo upsert. Estas dos, sin embargo,
-// se conservan localmente para poder iniciar sesion y recuperar la configuracion
-// esencial aunque la API no este disponible; sus cambios si deben enviarse aqui.
-const ONLINE_ONLY_SYNCED_LOCAL_TABLES = new Set(['usuarios', 'empresa'])
+// En modo solo-online los usuarios se leen y escriben directamente en la API.
+// Solo la identidad esencial de la empresa conserva una copia local sincronizable.
+const ONLINE_ONLY_SYNCED_LOCAL_TABLES = new Set(['empresa'])
 
 export function shouldSkipOnlineOnlyRowPush(tabla: string, onlineOnly: boolean): boolean {
   return onlineOnly && !ONLINE_ONLY_SYNCED_LOCAL_TABLES.has(tabla)

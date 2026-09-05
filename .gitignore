@@ -10,6 +10,8 @@ nul
 
 # Local Codex/OpenAI workspace state
 .openai/
+.tmp-browser-cdp/
+.tmp-browser-test/
 
 # Local diagnostics and screenshots
 logcat.txt

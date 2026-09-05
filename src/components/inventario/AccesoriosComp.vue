@@ -98,6 +98,8 @@ const form = ref({
   marca: null as number | null,
   categoria: null as number | null,
   proveedor_id: null as number | null,
+  tipo_comision: 'NINGUNA' as 'NINGUNA' | 'PERCENTAGE' | 'FIXED',
+  valor_comision: 0,
   imagen: '',
 })
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -355,6 +357,9 @@ function abrirCrear() {
     alerta: 10,
     marca: null,
     categoria: null,
+    proveedor_id: null,
+    tipo_comision: 'NINGUNA',
+    valor_comision: 0,
     imagen: '',
   }
   dialogVisible.value = true
@@ -375,6 +380,8 @@ function abrirEditar(accesorio: any) {
     marca: accesorio.marca || null,
     categoria: accesorio.categoria || null,
     proveedor_id: accesorio.proveedor_id || null,
+    tipo_comision: ['PERCENTAGE', 'FIXED'].includes(String(accesorio.tipo_comision || '').toUpperCase()) ? String(accesorio.tipo_comision).toUpperCase() as 'PERCENTAGE' | 'FIXED' : 'NINGUNA',
+    valor_comision: Number(accesorio.valor_comision || 0),
     imagen: accesorio.imagen || '',
   }
   dialogVisible.value = true
@@ -606,6 +613,8 @@ async function guardar() {
       marca: form.value.marca,
       categoria: form.value.categoria,
       proveedor_id: form.value.proveedor_id,
+      tipo_comision: form.value.tipo_comision === 'NINGUNA' ? '' : form.value.tipo_comision,
+      valor_comision: form.value.tipo_comision === 'NINGUNA' ? 0 : Math.max(0, Number(form.value.valor_comision || 0)),
     }
     if (form.value.imagen) data.imagen = form.value.imagen
 
@@ -1150,6 +1159,43 @@ useCloudRefresh(['accesorios'], cargarAccesorios)
           <div class="flex flex-col gap-1">
             <label class="font-semibold text-sm">Alerta Stock</label>
             <InputNumber v-model="form.alerta" fluid />
+          </div>
+        </div>
+        <div class="rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/20 p-3 space-y-3">
+          <div>
+            <div class="font-semibold text-sm text-emerald-800 dark:text-emerald-300">Comision por venta</div>
+            <div class="text-xs text-surface-500">Se aplicara cuando el vendedor asignado tenga un plan de comision activo.</div>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1">
+              <label class="font-semibold text-sm">Tipo de comision</label>
+              <Select
+                v-model="form.tipo_comision"
+                :options="[
+                  { label: 'Sin comision', value: 'NINGUNA' },
+                  { label: 'Porcentaje', value: 'PERCENTAGE' },
+                  { label: 'Monto fijo por unidad', value: 'FIXED' },
+                ]"
+                optionLabel="label"
+                optionValue="value"
+                fluid
+              />
+            </div>
+            <div v-if="form.tipo_comision !== 'NINGUNA'" class="flex flex-col gap-1">
+              <label class="font-semibold text-sm">Valor</label>
+              <InputNumber
+                v-model="form.valor_comision"
+                :mode="form.tipo_comision === 'FIXED' ? 'currency' : 'decimal'"
+                :currency="form.tipo_comision === 'FIXED' ? systemCurrency : undefined"
+                :locale="systemLocale"
+                :suffix="form.tipo_comision === 'PERCENTAGE' ? ' %' : undefined"
+                :min="0"
+                :max="form.tipo_comision === 'PERCENTAGE' ? 100 : undefined"
+                :maxFractionDigits="2"
+                fluid
+                @focus="(e) => e.target.select()"
+              />
+            </div>
           </div>
         </div>
         <div class="flex flex-col gap-1">

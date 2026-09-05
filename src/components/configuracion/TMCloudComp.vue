@@ -610,6 +610,7 @@ const TABLE_SCHEMAS: Record<string, { name: string; type: string; nullable?: boo
     { name: 'activo', type: 'TEXT' },
     { name: 'nota', type: 'TEXT' },
     { name: 'imagen', type: 'IMAGE' },
+    { name: 'tipo_cliente', type: 'TEXT', default: 'NORMAL' },
     { name: 'created_at', type: 'DATETIME' },
     { name: 'updated_at', type: 'DATETIME' },
   ],

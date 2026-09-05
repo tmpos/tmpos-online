@@ -7,6 +7,7 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import Textarea from 'primevue/textarea'
 import Fieldset from 'primevue/fieldset'
@@ -19,6 +20,7 @@ import { getImageUrl, uploadImage, deleteImage, isConnected as tmCloudConnected 
 import { isOnline, pushLocalRowToCloud } from '@/services/tmCloudSyncService'
 import { useLocaleProfile } from '@/composables/useLocaleProfile'
 import { useFilteredSearch } from '@/composables/useSearch'
+import { CUSTOMER_TYPE_OPTIONS, customerTypeLabel, normalizeCustomerType } from '@/domain/customerTypes'
 
 const toast = useToast()
 const { fiscal } = useLocaleProfile()
@@ -44,6 +46,7 @@ const camposArray = [
   'email',
   'direccion',
   'rnc',
+  'tipo_cliente',
   'imagen',
   'created_at',
   'updated_at',
@@ -64,6 +67,7 @@ const formDefault = () => ({
   telefono: '',
   direccion: '',
   imagen: '',
+  tipo_cliente: 'NORMAL',
 })
 
 const form = ref(formDefault())
@@ -163,7 +167,7 @@ function imagenClienteUrl(valor: string | null | undefined): string {
 }
 
 const { query: busqueda, results: clientesFiltrados } = useFilteredSearch(clientes, [
-  'nombre', 'rnc', 'cedula', 'email', 'telefono', 'whatsapp', 'direccion', 'codigo',
+  'nombre', 'rnc', 'cedula', 'email', 'telefono', 'whatsapp', 'direccion', 'codigo', 'tipo_cliente',
 ])
 
 async function cargarClientes() {
@@ -200,6 +204,7 @@ function abrirEditar(cliente: any) {
     telefono: cliente.telefono || '',
     direccion: cliente.direccion || '',
     imagen: cliente.imagen || '',
+    tipo_cliente: normalizeCustomerType(cliente.tipo_cliente),
   }
   tipoDocumento.value = form.value.rnc.replace(/\D/g, '').length === 11 ? 'CEDULA' : 'RNC'
   dialogVisible.value = true
@@ -271,6 +276,7 @@ async function guardar() {
       telefono: form.value.telefono.trim(),
       direccion: form.value.direccion.trim().toUpperCase(),
       imagen: form.value.imagen || '',
+      tipo_cliente: normalizeCustomerType(form.value.tipo_cliente),
     }
 
     if (isEditing.value) {
@@ -428,6 +434,13 @@ onMounted(async () => {
             </div>
           </template>
         </Column>
+        <Column field="tipo_cliente" header="Tipo" sortable style="width: 10rem">
+          <template #body="{ data }">
+            <span class="inline-flex rounded-full bg-primary-50 dark:bg-primary-900/30 px-2.5 py-1 text-xs font-semibold text-primary">
+              {{ customerTypeLabel(data.tipo_cliente) }}
+            </span>
+          </template>
+        </Column>
         <Column field="rnc" :header="fiscal.customerIdLabel" sortable style="width: 8rem" />
         <Column field="email" header="Email" sortable />
         <Column field="telefono" header="Telefono" sortable style="width: 9rem" />
@@ -450,7 +463,9 @@ onMounted(async () => {
           >
             <div class="flex items-center justify-between">
               <span class="text-xs font-mono text-surface-400">#{{ cliente.id }}</span>
-              <i class="pi pi-user text-primary-500"></i>
+              <span class="rounded-full bg-primary-50 dark:bg-primary-900/30 px-2 py-1 text-xs font-semibold text-primary">
+                {{ customerTypeLabel(cliente.tipo_cliente) }}
+              </span>
             </div>
 
             <div class="flex items-center gap-3 min-w-0">
@@ -515,6 +530,18 @@ onMounted(async () => {
         <div class="flex flex-col gap-1 sm:col-span-2">
           <label class="font-semibold text-sm">Nombre</label>
           <InputText v-model="form.nombre" placeholder="Nombre del cliente" fluid class="uppercase" style="text-transform: uppercase;" />
+        </div>
+        <div class="flex flex-col gap-1 sm:col-span-2">
+          <label class="font-semibold text-sm">Tipo de cliente</label>
+          <Select
+            v-model="form.tipo_cliente"
+            :options="CUSTOMER_TYPE_OPTIONS"
+            optionLabel="label"
+            optionValue="value"
+            placeholder="Seleccionar tipo"
+            fluid
+          />
+          <small class="text-surface-500">Este tipo sugiere el comprobante correspondiente al facturar.</small>
         </div>
         <div class="flex flex-col gap-1 sm:col-span-2">
           <label class="font-semibold text-sm">Documento</label>

@@ -7,16 +7,19 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
+import Menu from 'primevue/menu'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import InputOtp from 'primevue/inputotp'
 import Select from 'primevue/select'
+import Calendar from 'primevue/calendar'
 import Tag from 'primevue/tag'
 import Fieldset from 'primevue/fieldset'
 import ToggleSwitch from 'primevue/toggleswitch'
 import { useToast } from 'primevue/usetoast'
 import Toast from 'primevue/toast'
 import FacturaPdfPrint from './FacturaPdfPrint.vue'
+import TicketFacturaPrint from './TicketFacturaPrint.vue'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
 
@@ -30,6 +33,8 @@ const puedeVerTodosAlmacenes = computed(() => auth.isAdmin || auth.isSoporte)
 const loading = ref(false)
 const busqueda = ref('')
 const filtroEstado = ref('')
+const rangoActivo = ref<string>('mes')
+const rangoPersonalizado = ref<Date[]>([])
 const dialogDetalle = ref(false)
 const selectedCot = ref<any>(null)
 const selectedCotizaciones = ref<any[]>([])
@@ -38,6 +43,7 @@ const almacenDestino = ref<any>(null)
 const almacenesDestino = ref<any[]>([])
 const moviendoAlmacen = ref(false)
 const facturaPdfRef = ref<any>(null)
+const ticketPrintRef = ref<any>(null)
 const deleteDialogVisible = ref(false)
 const deleteOtpEnviado = ref(false)
 const deleteOtpLoading = ref(false)
@@ -49,6 +55,33 @@ const deleteOtpError = ref('')
 const dialogConvertir = ref(false)
 const metodoPagoConvertir = ref('EFECTIVO')
 const convirtiendo = ref(false)
+const compartiendoWhatsapp = ref(false)
+const dialogWhatsapp = ref(false)
+const cotizacionWhatsapp = ref<any>(null)
+const numeroWhatsapp = ref('')
+const guardandoWhatsapp = ref(false)
+const whatsappPaso = ref(0)
+const whatsappDetalle = ref('Preparando los datos de la cotizacion...')
+const etapasCompartirWhatsapp = [
+  { titulo: 'Generando PDF', detalle: 'Creando el documento profesional de la cotizacion.' },
+  { titulo: 'Copiando archivo', detalle: 'Colocando el PDF en el portapapeles de Windows.' },
+  { titulo: 'Abriendo WhatsApp', detalle: 'Iniciando WhatsApp Desktop con el mensaje preparado.' },
+]
+const actionMenu = ref()
+const cotizacionAccion = ref<any>(null)
+const actionMenuItems = computed(() => [
+  { label: 'Imprimir', icon: 'pi pi-print', command: () => imprimirCotizacion(cotizacionAccion.value) },
+  { label: 'Ver PDF', icon: 'pi pi-file-pdf', command: () => verPdfCotizacion(cotizacionAccion.value) },
+  { label: 'WhatsApp', icon: 'pi pi-whatsapp', disabled: () => compartiendoWhatsapp.value, command: () => compartirWhatsAppCotizacion(cotizacionAccion.value) },
+  { label: 'Convertir en factura', icon: 'pi pi-file-export', disabled: () => cotizacionAccion.value?.estado_factura === 'CONVERTIDA', command: () => abrirConvertir(cotizacionAccion.value) },
+  { separator: true },
+  { label: 'Eliminar', icon: 'pi pi-trash', command: () => confirmarBorrar(cotizacionAccion.value) },
+])
+
+function toggleActionMenu(event: Event, cotizacion: any) {
+  cotizacionAccion.value = cotizacion
+  actionMenu.value.toggle(event)
+}
 
 const metodosPago = [
   { label: 'Efectivo', value: 'EFECTIVO' },
@@ -68,6 +101,45 @@ const estados = [
   { label: 'Rechazada', value: 'RECHAZADA' },
 ]
 
+function fechaLocal(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function getRango(key: string): { inicio: string; fin: string } | null {
+  if (key === 'todo') return null
+  const hoy = new Date()
+  switch (key) {
+    case 'hoy': return { inicio: fechaLocal(hoy), fin: fechaLocal(hoy) }
+    case 'ayer': {
+      const ayer = new Date(hoy)
+      ayer.setDate(ayer.getDate() - 1)
+      return { inicio: fechaLocal(ayer), fin: fechaLocal(ayer) }
+    }
+    case 'semana': {
+      const inicio = new Date(hoy)
+      inicio.setDate(inicio.getDate() - (inicio.getDay() || 7) + 1)
+      const fin = new Date(inicio)
+      fin.setDate(fin.getDate() + 6)
+      return { inicio: fechaLocal(inicio), fin: fechaLocal(fin) }
+    }
+    case 'mes': {
+      return {
+        inicio: fechaLocal(new Date(hoy.getFullYear(), hoy.getMonth(), 1)),
+        fin: fechaLocal(new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0)),
+      }
+    }
+    case 'personalizado': {
+      if (rangoPersonalizado.value.length === 2 && rangoPersonalizado.value[0] && rangoPersonalizado.value[1]) {
+        return { inicio: fechaLocal(rangoPersonalizado.value[0]), fin: fechaLocal(rangoPersonalizado.value[1]) }
+      }
+      return null
+    }
+    default: return null
+  }
+}
+
+const rango = computed(() => getRango(rangoActivo.value))
+
 const cotizacionesFiltradas = computed(() => {
   let data = cotizaciones.value
   const texto = busqueda.value.toLowerCase().trim()
@@ -81,7 +153,19 @@ const cotizacionesFiltradas = computed(() => {
   if (filtroEstado.value) {
     data = data.filter(c => c.estado_factura === filtroEstado.value)
   }
-  return data
+  if (rango.value) {
+    data = data.filter((c: any) => {
+      const fecha = String(c.fecha_emision || '').slice(0, 10)
+      return fecha >= rango.value!.inicio && fecha <= rango.value!.fin
+    })
+  }
+  return [...data].sort((a: any, b: any) => {
+    const fecha = String(b.fecha_emision || '').localeCompare(String(a.fecha_emision || ''))
+    if (fecha !== 0) return fecha
+    const hora = String(b.hora || '').localeCompare(String(a.hora || ''))
+    if (hora !== 0) return hora
+    return Number(b.id || 0) - Number(a.id || 0)
+  })
 })
 
 const cotizacionesParaEliminar = computed(() => {
@@ -300,7 +384,12 @@ const productosCotizacion = computed(() => {
   } catch { return [] }
 })
 
-function abrirConvertir() {
+function abrirConvertir(cotizacion?: any) {
+  if (cotizacion) selectedCot.value = cotizacion
+  if (!selectedCot.value || selectedCot.value.estado_factura === 'CONVERTIDA') {
+    toast.add({ severity: 'info', summary: 'Cotizacion', detail: 'Esta cotizacion ya fue convertida en factura', life: 3000 })
+    return
+  }
   metodoPagoConvertir.value = 'EFECTIVO'
   dialogConvertir.value = true
 }
@@ -369,8 +458,89 @@ async function cambiarEstado(cotizacion: any, estado: string) {
   toast.add({ severity: 'success', summary: 'Estado actualizado', detail: estado, life: 2000 })
 }
 
-function verPdf() {
-  facturaPdfRef.value?.printFactura(selectedCot.value)
+function imprimirCotizacion(cotizacion?: any) {
+  const documento = cotizacion || selectedCot.value
+  if (documento) ticketPrintRef.value?.printTicket(documento)
+}
+
+function verPdfCotizacion(cotizacion?: any) {
+  const documento = cotizacion || selectedCot.value
+  if (documento) facturaPdfRef.value?.printFactura(documento)
+}
+
+function normalizarTelefonoWhatsapp(valor: any): string {
+  const digitos = String(valor || '').replace(/\D/g, '')
+  if (digitos.length === 10) return `1${digitos}`
+  return digitos
+}
+
+async function guardarWhatsappYCompartir() {
+  const documento = cotizacionWhatsapp.value
+  const telefono = normalizarTelefonoWhatsapp(numeroWhatsapp.value)
+  if (!documento || telefono.length < 8 || telefono.length > 15) {
+    toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'Ingresa un numero de WhatsApp valido', life: 3000 })
+    return
+  }
+
+  guardandoWhatsapp.value = true
+  try {
+    const telefonoLocal = telefono.startsWith('1') && telefono.length === 11 ? telefono.slice(1) : telefono
+    const res = await window.db.update('facturas', documento.id, { telefono_cliente: telefonoLocal })
+    if (!res.success) throw new Error(res.error || 'No se pudo guardar el numero de WhatsApp')
+
+    documento.telefono_cliente = telefonoLocal
+    if (selectedCot.value?.id === documento.id) selectedCot.value.telefono_cliente = telefonoLocal
+    if (cotizacionAccion.value?.id === documento.id) cotizacionAccion.value.telefono_cliente = telefonoLocal
+    dialogWhatsapp.value = false
+    await compartirWhatsAppCotizacion(documento)
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'WhatsApp', detail: error?.message || 'No se pudo guardar el numero', life: 4000 })
+  } finally {
+    guardandoWhatsapp.value = false
+  }
+}
+
+async function compartirWhatsAppCotizacion(cotizacion?: any) {
+  const documento = cotizacion || selectedCot.value
+  if (!documento || compartiendoWhatsapp.value) return
+
+  const telefonoLocal = String(documento.telefono_cliente || '').replace(/\D/g, '')
+  const telefono = telefonoLocal.length === 10 ? `1${telefonoLocal}` : telefonoLocal
+  if (!telefono) {
+    cotizacionWhatsapp.value = documento
+    numeroWhatsapp.value = ''
+    dialogWhatsapp.value = true
+    return
+  }
+
+  compartiendoWhatsapp.value = true
+  whatsappPaso.value = 0
+  whatsappDetalle.value = etapasCompartirWhatsapp[0].detalle
+  try {
+    const html = await facturaPdfRef.value?.generateFacturaHtml({ factura: documento })
+    if (!html) throw new Error('No se pudo preparar el contenido de la cotizacion')
+
+    const nombre = `Cotizacion_${documento.no_factura || 'sin_numero'}.pdf`
+    const pdf = await window.electron.invoke('pdf:generateToFile', html, nombre) as any
+    if (!pdf?.success || !pdf.filePath) throw new Error(pdf?.error || 'No se pudo crear el PDF')
+
+    whatsappPaso.value = 1
+    whatsappDetalle.value = etapasCompartirWhatsapp[1].detalle
+    const copiado = await window.electron.invoke('clipboard:copyFile', pdf.filePath) as any
+    if (!copiado?.success) throw new Error(copiado?.error || 'No se pudo copiar el PDF al portapapeles')
+
+    whatsappPaso.value = 2
+    whatsappDetalle.value = etapasCompartirWhatsapp[2].detalle
+    const mensaje = `Cotizacion ${documento.no_factura || ''}\nTotal: RD$${Number(documento.total || 0).toFixed(2)}\nCliente: ${documento.nombre_cliente || 'CONSUMIDOR FINAL'}\nFecha: ${documento.fecha_emision || ''}`
+    const resultado = await window.electron.invoke('whatsapp:open', { telefono, mensaje }) as any
+    if (resultado?.success === false) throw new Error(resultado.error || 'No se pudo abrir WhatsApp')
+
+    toast.add({ severity: 'success', summary: 'Cotizacion preparada', detail: 'El PDF esta copiado. Pegalo en WhatsApp con Ctrl+V para enviarlo.', life: 5000 })
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'No se pudo compartir', detail: error?.message || 'Ocurrio un error preparando la cotizacion', life: 4500 })
+  } finally {
+    compartiendoWhatsapp.value = false
+  }
 }
 
 onMounted(cargarCotizaciones)
@@ -380,6 +550,57 @@ onMounted(cargarCotizaciones)
   <div>
     <Toast />
     <FacturaPdfPrint ref="facturaPdfRef" />
+    <TicketFacturaPrint ref="ticketPrintRef" />
+
+    <Dialog
+      v-model:visible="compartiendoWhatsapp"
+      modal
+      :closable="false"
+      :closeOnEscape="false"
+      :draggable="false"
+      :showHeader="false"
+      :style="{ width: 'min(30rem, 92vw)' }"
+    >
+      <div class="px-2 py-5 sm:px-5">
+        <div class="flex flex-col items-center text-center">
+          <div class="relative mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-950/40">
+            <i class="pi pi-whatsapp text-4xl text-emerald-500"></i>
+            <span class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full border-4 border-surface-0 bg-primary text-primary-contrast dark:border-surface-800">
+              <i class="pi pi-spin pi-spinner text-sm"></i>
+            </span>
+          </div>
+          <span class="mb-2 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">Compartiendo cotizacion</span>
+          <h3 class="text-xl font-bold text-surface-900 dark:text-surface-0">{{ etapasCompartirWhatsapp[whatsappPaso].titulo }}</h3>
+          <p class="mt-2 min-h-10 text-sm leading-5 text-surface-500">{{ whatsappDetalle }}</p>
+        </div>
+
+        <div class="my-6 h-2 overflow-hidden rounded-full bg-surface-100 dark:bg-surface-700">
+          <div class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600 transition-all duration-500" :style="{ width: `${((whatsappPaso + 1) / etapasCompartirWhatsapp.length) * 100}%` }"></div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <div v-for="(etapa, index) in etapasCompartirWhatsapp" :key="etapa.titulo" class="flex flex-col items-center gap-2 text-center">
+            <span
+              class="flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold transition-colors"
+              :class="index < whatsappPaso
+                ? 'border-emerald-500 bg-emerald-500 text-white'
+                : index === whatsappPaso
+                  ? 'border-primary bg-primary text-primary-contrast'
+                  : 'border-surface-300 text-surface-400 dark:border-surface-600'"
+            >
+              <i v-if="index < whatsappPaso" class="pi pi-check text-xs"></i>
+              <span v-else>{{ index + 1 }}</span>
+            </span>
+            <span class="text-[11px] font-medium" :class="index <= whatsappPaso ? 'text-surface-700 dark:text-surface-200' : 'text-surface-400'">{{ etapa.titulo }}</span>
+          </div>
+        </div>
+
+        <div class="mt-6 flex items-center justify-center gap-2 rounded-lg bg-surface-50 px-3 py-2 text-xs text-surface-500 dark:bg-surface-700/40">
+          <i class="pi pi-info-circle"></i>
+          No cierres la aplicacion mientras se prepara el archivo.
+        </div>
+      </div>
+    </Dialog>
 
     <Fieldset legend="Cotizaciones">
       <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
@@ -389,6 +610,32 @@ onMounted(cargarCotizaciones)
             <InputText v-model="busqueda" placeholder="Buscar cotizacion..." />
           </IconField>
           <Select v-model="filtroEstado" :options="estados" optionLabel="label" optionValue="value" placeholder="Estado" class="w-36" fluid />
+        </div>
+        <div class="flex items-center gap-1 flex-wrap">
+          <Button
+            v-for="item in [
+              { label: 'Todo', key: 'todo' },
+              { label: 'Hoy', key: 'hoy' },
+              { label: 'Ayer', key: 'ayer' },
+              { label: 'Semana', key: 'semana' },
+              { label: 'Mes', key: 'mes' },
+              { label: 'Rango', key: 'personalizado' },
+            ]"
+            :key="item.key"
+            :label="item.label"
+            size="small"
+            :severity="rangoActivo === item.key ? 'primary' : 'secondary'"
+            :outlined="rangoActivo !== item.key"
+            @click="rangoActivo = item.key"
+          />
+          <Calendar
+            v-if="rangoActivo === 'personalizado'"
+            v-model="rangoPersonalizado"
+            selectionMode="range"
+            dateFormat="yy-mm-dd"
+            placeholder="Seleccionar rango"
+            showIcon
+          />
         </div>
         <div class="flex items-center gap-2">
           <label v-if="puedeVerTodosAlmacenes" class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
@@ -422,13 +669,15 @@ onMounted(cargarCotizaciones)
         :rows="15"
         :rowsPerPageOptions="[15, 25, 50]"
         dataKey="id"
+        sortField="fecha_emision"
+        :sortOrder="-1"
         responsiveLayout="scroll"
         @row-click="abrirDetalle($event.data)"
       >
         <Column selectionMode="multiple" headerStyle="width: 3rem" />
         <Column header="Acciones" style="width: 5rem">
           <template #body="{ data }">
-            <Button icon="pi pi-trash" severity="danger" text rounded @click.stop="confirmarBorrar(data)" v-tooltip="'Eliminar'" />
+            <Button icon="pi pi-ellipsis-v" severity="secondary" text rounded @click.stop="toggleActionMenu($event, data)" v-tooltip="'Acciones'" />
           </template>
         </Column>
         <Column field="no_factura" header="No." sortable style="width: 8rem" />
@@ -507,7 +756,7 @@ onMounted(cargarCotizaciones)
         </div>
 
         <div class="border-t border-surface-200 dark:border-surface-700 pt-3 flex flex-wrap gap-2">
-          <Button label="Aprobar" icon="pi pi-check" severity="success" size="small" @click="abrirConvertir" />
+          <Button label="Convertir en factura" icon="pi pi-file-export" severity="success" size="small" :disabled="selectedCot?.estado_factura === 'CONVERTIDA'" @click="abrirConvertir()" />
           <Button label="Vencida" icon="pi pi-clock" severity="danger" size="small" @click="cambiarEstado(selectedCot, 'VENCIDA')" />
           <Button label="Rechazar" icon="pi pi-times" severity="secondary" size="small" @click="cambiarEstado(selectedCot, 'RECHAZADA')" />
           <Button label="Eliminar" icon="pi pi-trash" severity="danger" size="small" outlined @click="confirmarBorrar(selectedCot)" />
@@ -515,8 +764,40 @@ onMounted(cargarCotizaciones)
       </div>
 
       <template #footer>
-        <Button label="Ver PDF" icon="pi pi-file-pdf" severity="danger" @click="verPdf" />
+        <Button label="Imprimir" icon="pi pi-print" severity="info" @click="imprimirCotizacion()" />
+        <Button label="PDF" icon="pi pi-file-pdf" severity="danger" @click="verPdfCotizacion()" />
+        <Button label="WhatsApp" icon="pi pi-whatsapp" severity="success" :disabled="compartiendoWhatsapp" @click="compartirWhatsAppCotizacion()" />
         <Button label="Cerrar" severity="secondary" text @click="dialogDetalle = false" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="dialogWhatsapp"
+      header="Agregar WhatsApp"
+      modal
+      :style="{ width: 'min(26rem, 95vw)' }"
+      :draggable="false"
+    >
+      <div class="space-y-4">
+        <div class="rounded-lg border border-green-200 bg-green-50 p-3 text-sm dark:border-green-800 dark:bg-green-900/20">
+          <p class="font-semibold text-green-700 dark:text-green-300">El cliente no tiene WhatsApp registrado.</p>
+          <p class="mt-1 text-xs text-surface-500">Agrega el numero para guardarlo y compartir la cotizacion.</p>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Numero de WhatsApp</label>
+          <InputText
+            v-model="numeroWhatsapp"
+            placeholder="8095551234"
+            inputmode="tel"
+            fluid
+            autofocus
+            @keydown.enter="guardarWhatsappYCompartir"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="guardandoWhatsapp" @click="dialogWhatsapp = false" />
+        <Button label="Guardar y compartir" icon="pi pi-whatsapp" severity="success" :loading="guardandoWhatsapp" @click="guardarWhatsappYCompartir" />
       </template>
     </Dialog>
 
@@ -587,5 +868,6 @@ onMounted(cargarCotizaciones)
         />
       </template>
     </Dialog>
+    <Menu ref="actionMenu" :model="actionMenuItems" popup />
   </div>
 </template>

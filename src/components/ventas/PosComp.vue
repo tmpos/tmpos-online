@@ -54,6 +54,9 @@ import { sanitizePrintableHtml } from '@/utils/htmlSecurity'
 import { matchesSearch } from '@/composables/useSearch'
 import { filterPosCatalog, filterPosCustomers, searchGlobalPosCatalog } from '@/domain/posCatalog'
 import { imeiBelongsToPhone, resolvePhoneForImei } from '@/domain/phoneImeiRelation'
+import { alanubeSaleEndpoint, isSupportedPosSaleEcf, normalizeEcfType, saleEcfRequiresBuyer } from '@/domain/electronicInvoiceTypes'
+import { CUSTOMER_TYPE_OPTIONS, customerReceiptType, customerTypeLabel, normalizeCustomerType } from '@/domain/customerTypes'
+import { COMMISSION_CONFIG_KEY, calculateSalesCommission, type UserCommissionPlan } from '@/domain/salesCommissions'
 
 async function crearQrDataUrl(contenido: string, opciones: any): Promise<string> {
   const { default: QRCode } = await import('qrcode')
@@ -143,6 +146,18 @@ const serialesDisponibles = ref<any[]>([])
 const clientes = ref<any[]>([])
 const marcas = ref<any[]>([])
 const categorias = ref<any[]>([])
+const vendedoresComision = ref<any[]>([])
+const vendedorComisionId = ref<number | null>(null)
+const planesComision = ref<UserCommissionPlan[]>([])
+
+const vendedorComisionSeleccionado = computed(() => vendedoresComision.value.find(
+  (vendedor: any) => Number(vendedor.id) === Number(vendedorComisionId.value),
+))
+const planVendedorSeleccionado = computed(() => planesComision.value.find(
+  item => Number(item.userId) === Number(vendedorComisionId.value),
+))
+const comisionEstimada = computed(() => calculateSalesCommission(planVendedorSeleccionado.value, cart.value)
+  .reduce((sum, item) => sum + item.amount, 0))
 
 const contadorTelefonos = computed(() => ocultarSinStock.value
   ? telefonos.value.filter((telefono: any) => cantidadImeisTelefono(telefono) > 0).length
@@ -175,7 +190,7 @@ const flippedElecId = ref<number | null>(null)
 const dialogCliente = ref(false)
 const busquedaCliente = ref('')
 const dialogNuevoCliente = ref(false)
-const nuevoClienteForm = ref({ nombre: '', telefono: '', direccion: '', rnc: '' })
+const nuevoClienteForm = ref({ nombre: '', telefono: '', direccion: '', rnc: '', tipo_cliente: 'NORMAL' })
 const rncTipo = ref<'RNC' | 'CEDULA'>('RNC')
 const buscandoClienteApi = ref(false)
 const dialogProductoPersonalizado = ref(false)
@@ -269,6 +284,14 @@ const mixtoCheque = ref(0)
 const mixtoError = ref('')
 const dialogTicket = ref(false)
 const dialogPrintChoice = ref(false)
+const compartiendoWhatsapp = ref(false)
+const whatsappPaso = ref(0)
+const whatsappDetalle = ref('Preparando los datos de la factura...')
+const etapasCompartirWhatsapp = [
+  { titulo: 'Generando PDF', detalle: 'Creando el documento profesional de la factura.' },
+  { titulo: 'Copiando archivo', detalle: 'Colocando el PDF en el portapapeles de Windows.' },
+  { titulo: 'Abriendo WhatsApp', detalle: 'Iniciando WhatsApp Desktop con el mensaje preparado.' },
+]
 const facturaPdfRef = ref<any>(null)
 const ticketFacturaPrintRef = ref<any>(null)
 const ticketCuentaCobrarRef = ref<any>(null)
@@ -399,12 +422,12 @@ function formatSecuenciaComprobante(comp: any): string {
 
 const comprobantesDisponibles = computed(() => {
   if (!facturacionElectronicaActiva.value) return comprobantes.value
-  return comprobantes.value.filter((comp: any) => ['E31', 'E32'].includes(String(comp?.tipo || '').toUpperCase()))
+  return comprobantes.value.filter((comp: any) => isSupportedPosSaleEcf(comp?.tipo))
 })
 
-function seleccionarComprobanteDisponible() {
+function seleccionarComprobanteDisponible(forzarPredeterminado = false) {
   const disponibles = comprobantesDisponibles.value
-  if (disponibles.some((comp: any) => comp.id === comprobanteSeleccionado.value?.id)) return
+  if (!forzarPredeterminado && disponibles.some((comp: any) => comp.id === comprobanteSeleccionado.value?.id)) return
 
   const preferido = facturacionElectronicaActiva.value
     ? disponibles.find((comp: any) => String(comp.tipo || '').toUpperCase() === String(comprobanteElectronicoDefault.value || '').toUpperCase())
@@ -449,6 +472,31 @@ async function toggleFacturacionElectronica(value: boolean) {
 const POS_STORAGE_KEY = 'pos_cart_data'
 const auth = useAuthStore()
 const puedeVerDetalleImei = computed(() => Boolean(auth.isAdmin || auth.isSoporte))
+
+function seleccionarVendedorActual() {
+  const currentId = Number(auth.user?.id || 0)
+  vendedorComisionId.value = vendedoresComision.value.some((vendedor: any) => Number(vendedor.id) === currentId)
+    ? currentId
+    : (vendedoresComision.value[0]?.id ?? null)
+}
+
+async function cargarConfiguracionComisiones() {
+  try {
+    const [usuariosResult, planesResult] = await Promise.all([
+      window.db.getAll('usuarios'),
+      window.config.get(COMMISSION_CONFIG_KEY),
+    ])
+    vendedoresComision.value = (usuariosResult.success ? usuariosResult.data || [] : [])
+      .filter((usuario: any) => String(usuario.estado || 'ACTIVADO').toUpperCase() !== 'DESACTIVADO')
+      .map((usuario: any) => ({ ...usuario, displayName: usuario.nombre || usuario.usuario || usuario.email || `Usuario ${usuario.id}` }))
+    try { planesComision.value = JSON.parse(String(planesResult?.data || '[]')) || [] } catch { planesComision.value = [] }
+    seleccionarVendedorActual()
+  } catch (_) {
+    vendedoresComision.value = []
+    planesComision.value = []
+    vendedorComisionId.value = Number(auth.user?.id || 0) || null
+  }
+}
 
 const camposDetalleImei = computed(() => {
   if (!detalleImei.value) return []
@@ -506,13 +554,10 @@ async function abrirDetalleImei() {
     cargandoDetalleImei.value = false
   }
 }
-// Solo el nivel explícito "Vendedor" envía facturas pendientes. El nivel
-// genérico "Usuario" puede compartir permisos de venta, pero cobra normalmente.
-const esVendedorPendiente = computed(() => {
-  const nivel = String(auth.user?.nivel_seguridad || '').trim().toLowerCase()
-  const rol = String(auth.user?.rol || '').trim().toLowerCase()
-  return nivel === 'vendedor' || (!nivel && rol === 'vendedor')
-})
+// Las facturas solo pueden ser terminadas por Caja, Administrador o Soporte.
+// Un vendedor sin uno de esos permisos siempre deja la venta en espera.
+const puedeFinalizarFactura = computed(() => Boolean(auth.isCajero || auth.isAdmin || auth.isSoporte))
+const esVendedorSoloHold = computed(() => Boolean(auth.isVendedor && !puedeFinalizarFactura.value))
 const sonidos = reactive(useSonidos())
 const conexion = reactive(useConexion())
 const caja = reactive(useCaja())
@@ -694,6 +739,10 @@ function selectSpotlightResult(r: any) {
 }
 
 async function recallHold(hold: any) {
+  if (!puedeFinalizarFactura.value) {
+    toast.add({ severity: 'warn', summary: 'Acceso restringido', detail: 'Solo Caja, Administrador o Soporte pueden recuperar y terminar una venta en espera', life: 3500 })
+    return
+  }
   const data = holdRecall.recallVenta(hold)
   if (cart.value.length > 0) {
     if (!confirm('Hay productos en el carrito actual. ¿Deseas reemplazarlos con la venta retenida?')) return
@@ -707,6 +756,7 @@ async function recallHold(hold: any) {
   descuentoValor.value = data.descuentoValor
   metodoPago.value = data.metodoPago
   nota.value = data.nota
+  if (Number(data.vendedorId || 0) > 0) vendedorComisionId.value = Number(data.vendedorId)
   await holdRecall.eliminarHold(hold.id, 'RECUPERADA')
   holdRecall.dialogHold = false
   sonidos.playSuccess()
@@ -1571,6 +1621,17 @@ function normalizarTelefonoWhatsapp(valor: any): string {
   return digits
 }
 
+async function abrirWhatsappDesktop(telefono: string, mensaje: string): Promise<boolean> {
+  try {
+    const resultado = await window.electron.invoke('whatsapp:open', { telefono, mensaje })
+    if (resultado?.success === false) throw new Error(resultado.error || 'No se pudo abrir WhatsApp')
+    return true
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'WhatsApp', detail: error?.message || 'No se pudo abrir WhatsApp en esta computadora', life: 4000 })
+    return false
+  }
+}
+
 function resumenWhatsappCuentaFactCoti(cuenta: any): string {
   const pagos = parsePagosCuentaFactCoti(cuenta)
   const ultimosPagos = pagos.slice(-5).map((p: any, index: number) => {
@@ -1596,7 +1657,7 @@ function resumenWhatsappCuentaFactCoti(cuenta: any): string {
   ].filter(line => line !== '').join('\n')
 }
 
-function enviarWhatsappCuentaFactCoti() {
+async function enviarWhatsappCuentaFactCoti() {
   const cuenta = cuentaCobrarFactCoti.value
   if (!cuenta) return
 
@@ -1607,8 +1668,7 @@ function enviarWhatsappCuentaFactCoti() {
     return
   }
 
-  const mensaje = encodeURIComponent(resumenWhatsappCuentaFactCoti(cuenta))
-  window.open(`https://wa.me/${telefono}?text=${mensaje}`, '_blank')
+  await abrirWhatsappDesktop(telefono, resumenWhatsappCuentaFactCoti(cuenta))
 }
 
 function abrirCambiarWhatsappFactCoti() {
@@ -1686,7 +1746,7 @@ async function guardarWhatsappCuentaFactCoti() {
     } catch (_) {}
 
     dialogWhatsappCuentaFactCoti.value = false
-    enviarWhatsappCuentaFactCoti()
+    await enviarWhatsappCuentaFactCoti()
   } catch (error: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: error?.message || 'No se pudo guardar el WhatsApp', life: 3000 })
   } finally {
@@ -1738,6 +1798,8 @@ function normalizarProductoFacturaParaCart(producto: any) {
     capacidad: producto.capacidad || '',
     capacidades: normalizarListaTextos(producto.capacidades || producto.capacidad),
     accesorio_id: producto.accesorio_id || null,
+    tipo_comision: producto.tipo_comision || '',
+    valor_comision: Number(producto.valor_comision || 0),
     stock: Number(producto.stock || 0),
   }
 }
@@ -2091,6 +2153,10 @@ async function imprimirFacturaFactCoti() {
     total: Number(factura.total || 0),
     nota: factura.nota || '',
     metodo_pago: factura.metodo_pago || '',
+    efectivo: Number(factura.efectivo || 0),
+    tarjeta: Number(factura.tarjeta || 0),
+    transferencia: Number(factura.transferencia || 0),
+    cheque: Number(factura.cheque || 0),
     document_stamp_url: alanubeDocumentStampUrl,
     codigo_seguridad: alanubeSecurityCode,
     alanube_id: alanubeResponse?.id || '',
@@ -2310,8 +2376,8 @@ async function editarFacturaFactCoti() {
 async function cobrarFacturaPendiente() {
   const factura = registroFatCotiSeleccionado.value
   if (!factura?.id || !esFacturaPendiente(factura)) return
-  if (!auth.isCajero && !auth.isAdmin && !auth.isGerente) {
-    toast.add({ severity: 'warn', summary: 'Acceso restringido', detail: 'Solo Caja puede cobrar una factura pendiente', life: 3000 })
+  if (!puedeFinalizarFactura.value) {
+    toast.add({ severity: 'warn', summary: 'Acceso restringido', detail: 'Solo Caja, Administrador o Soporte pueden cobrar una factura pendiente', life: 3000 })
     return
   }
   const turnoRes = await window.electron.invoke('caja:getTurnoActivo', almacenActivoStore.activeUid || '') as any
@@ -3255,6 +3321,8 @@ function agregarAccesorio(accesorio: any) {
     precio: accesorio.precio_venta || 0,
     precio_normal: accesorio.precio_venta || 0,
     costo: accesorio.costo || 0,
+    tipo_comision: accesorio.tipo_comision || '',
+    valor_comision: Number(accesorio.valor_comision || 0),
     stock: accesorio.cantidad || 0,
     cantidad: 1,
   })
@@ -3388,11 +3456,20 @@ function aplicarCambioPrecio() {
 
 function seleccionarCliente(cliente: any) {
   clienteSeleccionado.value = cliente
+  const tipoComprobante = customerReceiptType(cliente?.tipo_cliente)
+  if (tipoComprobante) {
+    const comprobanteCompatible = comprobantesDisponibles.value.find(
+      (comprobante: any) => String(comprobante?.tipo || '').toUpperCase() === tipoComprobante,
+    )
+    if (comprobanteCompatible) {
+      comprobanteSeleccionado.value = comprobanteCompatible
+    }
+  }
   dialogCliente.value = false
 }
 
 function abrirNuevoCliente() {
-  nuevoClienteForm.value = { nombre: '', telefono: '', direccion: '', rnc: '' }
+  nuevoClienteForm.value = { nombre: '', telefono: '', direccion: '', rnc: '', tipo_cliente: 'NORMAL' }
   rncTipo.value = 'RNC'
   dialogNuevoCliente.value = true
 }
@@ -3446,12 +3523,19 @@ async function guardarNuevoCliente() {
       direccion: nuevoClienteForm.value.direccion.trim().toUpperCase(),
       rnc: nuevoClienteForm.value.rnc.trim().replace(/-/g, ''),
       email: '',
+      tipo_cliente: normalizeCustomerType(nuevoClienteForm.value.tipo_cliente),
     }
     const res = await window.db.insert('clientes', addAlmacenIdFilter(data))
     if (res.success) {
       const nuevoCliente = { id: res.data.id, ...data }
       clientes.value.unshift(nuevoCliente)
       clienteSeleccionado.value = nuevoCliente
+      const comprobanteCompatible = comprobantesDisponibles.value.find(
+        (comprobante: any) => String(comprobante?.tipo || '').toUpperCase() === customerReceiptType(nuevoCliente.tipo_cliente),
+      )
+      if (comprobanteCompatible) {
+        comprobanteSeleccionado.value = comprobanteCompatible
+      }
       dialogNuevoCliente.value = false
       dialogCliente.value = false
       toast.add({ severity: 'success', summary: 'Cliente creado', detail: data.nombre, life: 2000 })
@@ -3484,24 +3568,32 @@ function agregarProductoPersonalizado() {
   toast.add({ severity: 'success', summary: 'Agregado', detail: prodPersonalizado.value.nombre, life: 2000 })
 }
 
-async function holdearVenta() {
+async function holdearVenta(esHoldAutomaticoVendedor = false) {
   if (cart.value.length === 0) {
     toast.add({ severity: 'warn', summary: 'Carrito vacio', detail: 'Agrega productos al carrito para retener', life: 2000 })
     return
   }
   try {
+    const vendedorAsignado = vendedorComisionSeleccionado.value || {
+      id: Number(auth.user?.id || 0),
+      displayName: auth.user?.nombre || auth.user?.usuario || 'POS',
+    }
     const hold = await holdRecall.holdVenta(
       cart.value, clienteSeleccionado.value, clienteExpress.value,
       descuentoFijo.value, descuentoPorc.value, descuentoTipo.value, descuentoValor.value,
       metodoPago.value, nota.value, total.value,
-      auth.user?.nombre || auth.user?.usuario || ''
+      auth.user?.nombre || auth.user?.usuario || '',
+      Number(vendedorAsignado.id || 0),
+      String(vendedorAsignado.displayName || vendedorAsignado.nombre || vendedorAsignado.usuario || '')
     )
     limpiarCarrito()
     sonidos.playClick()
     toast.add({
       severity: hold.syncPendiente ? 'warn' : 'info',
-      summary: hold.syncPendiente ? 'Venta pausada localmente' : 'Venta pausada y sincronizada',
-      detail: `ID: ${hold.id} - ${hold.itemsCount} producto(s) - ${systemCurrency.value} ${formatCurrency(hold.total)}`,
+      summary: esHoldAutomaticoVendedor ? 'Venta enviada a Caja' : (hold.syncPendiente ? 'Venta pausada localmente' : 'Venta pausada y sincronizada'),
+      detail: esHoldAutomaticoVendedor
+        ? `La venta quedó en espera con el ID ${hold.id}. Caja, Administrador o Soporte podrán completarla.`
+        : `ID: ${hold.id} - ${hold.itemsCount} producto(s) - ${systemCurrency.value} ${formatCurrency(hold.total)}`,
       life: 3500,
     })
   } catch (error: any) {
@@ -3545,31 +3637,44 @@ async function soloTicket() {
 
 async function compartirWhatsApp() {
   const d = ticketData.value
-  if (!d) return
+  if (!d || compartiendoWhatsapp.value) return
   const telefono = d.telefono || ''
   if (!telefono) {
     toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'El cliente no tiene telefono registrado', life: 3000 })
     return
   }
 
-  try {
-    const html = await facturaPdfRef.value?.generateFacturaHtml({ factura: d })
-    if (html) {
-      const nombre = `Factura_${d.no_factura || 'sin_numero'}.pdf`
-      const res = await window.electron.invoke('pdf:generateToFile', html, nombre) as any
-      if (res.success) {
-        await window.electron.invoke('clipboard:copyFile', res.filePath)
-        toast.add({ severity: 'info', summary: 'PDF copiado', detail: 'PDF copiado al portapapeles. Abre WhatsApp y pega (Ctrl+V) para enviarlo.', life: 5000 })
-      }
-    }
-  } catch (_) {}
-
-  const mensaje = encodeURIComponent(
-    `Factura ${d.no_factura}\nTotal: ${systemCurrency.value}${d.total?.toFixed(2)}\nCliente: ${d.cliente}\nFecha: ${d.fecha}`
-  )
-  window.open(`https://wa.me/${telefono.replace(/[^0-9]/g, '')}?text=${mensaje}`, '_blank')
   dialogPrintChoice.value = false
-  cerrarTicket()
+  compartiendoWhatsapp.value = true
+  whatsappPaso.value = 0
+  whatsappDetalle.value = etapasCompartirWhatsapp[0].detalle
+  try {
+    await asegurarQrFiscalTicket()
+    const html = await facturaPdfRef.value?.generateFacturaHtml({ factura: d })
+    if (!html) throw new Error('No se pudo preparar el contenido de la factura')
+
+    const nombre = `Factura_${d.no_factura || 'sin_numero'}.pdf`
+    const pdf = await window.electron.invoke('pdf:generateToFile', html, nombre) as any
+    if (!pdf?.success || !pdf.filePath) throw new Error(pdf?.error || 'No se pudo crear el PDF')
+
+    whatsappPaso.value = 1
+    whatsappDetalle.value = etapasCompartirWhatsapp[1].detalle
+    const copiado = await window.electron.invoke('clipboard:copyFile', pdf.filePath) as any
+    if (!copiado?.success) throw new Error(copiado?.error || 'No se pudo copiar el PDF al portapapeles')
+
+    whatsappPaso.value = 2
+    whatsappDetalle.value = etapasCompartirWhatsapp[2].detalle
+    const telefonoWhatsapp = normalizarTelefonoWhatsapp(telefono)
+    const mensaje = `Factura ${d.no_factura}\nTotal: ${systemCurrency.value}${d.total?.toFixed(2)}\nCliente: ${d.cliente}\nFecha: ${d.fecha}`
+    if (!await abrirWhatsappDesktop(telefonoWhatsapp, mensaje)) return
+
+    toast.add({ severity: 'success', summary: 'Factura preparada', detail: 'El PDF esta copiado. Pegalo en WhatsApp con Ctrl+V para enviarlo.', life: 5000 })
+    cerrarTicket()
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'No se pudo compartir', detail: error?.message || 'Ocurrio un error preparando la factura', life: 4500 })
+  } finally {
+    compartiendoWhatsapp.value = false
+  }
 }
 
 async function compartirImagen() {
@@ -3728,6 +3833,20 @@ function getTicketBody(d: any): string {
     CHEQUE: 'CHEQUE',
     MIXTO: 'MIXTO',
   }[(d.metodo_pago || 'EFECTIVO')] || d.metodo_pago
+  const partesPagoMixto = String(d.metodo_pago || '').toUpperCase() === 'MIXTO'
+    ? [
+        { etiqueta: 'EFECTIVO', monto: Number(d.efectivo || 0) },
+        { etiqueta: 'TARJETA', monto: Number(d.tarjeta || 0) },
+        { etiqueta: 'TRANSFERENCIA', monto: Number(d.transferencia || 0) },
+        { etiqueta: 'CHEQUE', monto: Number(d.cheque || 0) },
+      ].filter(parte => parte.monto > 0)
+    : []
+  if (String(d.metodo_pago || '').toUpperCase() === 'MIXTO' && !partesPagoMixto.some(parte => parte.etiqueta === 'EFECTIVO')) {
+    const efectivoRestante = Math.round((Number(d.total || 0) - partesPagoMixto.reduce((suma, parte) => suma + parte.monto, 0)) * 100) / 100
+    if (efectivoRestante > 0.009) partesPagoMixto.unshift({ etiqueta: 'EFECTIVO', monto: efectivoRestante })
+  }
+  const filasPagoMixto = partesPagoMixto.map(parte => `<tr><td>${parte.etiqueta}:</td><td style="text-align:right;">${systemCurrency.value}${fmt(parte.monto)}</td></tr>`).join('')
+
   const debeMostrarQrFiscal = debeForzarQrTicket(d)
 
   return `
@@ -3780,6 +3899,7 @@ ${isTicketOptionOn(cfg.show_totals) ? `<div class="linea" style="margin-top:30px
   </table>
   <table style="width:100%;border-collapse:collapse">
     <tr><td>TOTAL:</td><td style="text-align:right;"><span style="font-size:1.5em !important;margin-top:5px;margin-bottom:5px;">${systemCurrency.value}${fmt(d.total)}</span></td></tr>
+    ${filasPagoMixto ? `<tr><td colspan="2" style="padding-top:5px;border-top:1px dashed #777;font-size:9px;">DESGLOSE DEL PAGO</td></tr>${filasPagoMixto}` : ''}
   </table>
 </div>
 
@@ -3927,6 +4047,8 @@ function limpiarCarrito() {
   clienteSeleccionado.value = null
   facturaEditandoPos.value = null
   productosOriginalesEditandoPos.value = []
+  seleccionarVendedorActual()
+  seleccionarComprobanteDisponible(true)
   localStorage.removeItem(POS_STORAGE_KEY)
 }
 
@@ -4041,8 +4163,15 @@ async function confirmarVenta() {
     toast.add({ severity: 'warn', summary: 'Total invalido', detail: 'El total no puede ser negativo', life: 3000 })
     return
   }
-  const seEnviaraPendienteCaja = Boolean(esVendedorPendiente.value && !esCotizacion.value && !facturaEditandoPos.value?.id)
-  if (!seEnviaraPendienteCaja && !esCotizacion.value && facturacionElectronicaActiva.value && !facturaEditandoPos.value?.id) {
+  if (!esCotizacion.value && !puedeFinalizarFactura.value) {
+    if (esVendedorSoloHold.value && !facturaEditandoPos.value?.id) {
+      await holdearVenta(true)
+    } else {
+      toast.add({ severity: 'warn', summary: 'Acceso restringido', detail: 'Solo Caja, Administrador o Soporte pueden terminar una factura', life: 3500 })
+    }
+    return
+  }
+  if (!esCotizacion.value && facturacionElectronicaActiva.value && !facturaEditandoPos.value?.id) {
     if (!alanubeBaseUrl.value || !alanubeToken.value.trim()) {
       toast.add({ severity: 'warn', summary: 'Alanube requerido', detail: 'Configura URL y token de Alanube antes de facturar electronicamente', life: 4000 })
       return
@@ -4055,13 +4184,15 @@ async function confirmarVenta() {
       toast.add({ severity: 'warn', summary: 'e-CF requerido', detail: 'Selecciona un comprobante electronico activo', life: 3500 })
       return
     }
-    if (!['E31', 'E32'].includes(String(comprobanteSeleccionado.value?.tipo || '').toUpperCase())) {
-      toast.add({ severity: 'warn', summary: 'e-CF no soportado', detail: 'Alanube esta conectado para E31 y E32 en este flujo', life: 3500 })
+    if (!isSupportedPosSaleEcf(comprobanteSeleccionado.value?.tipo)) {
+      toast.add({ severity: 'warn', summary: 'e-CF no soportado', detail: 'Este flujo permite facturas E31, E32 y gubernamentales E45', life: 3500 })
       return
     }
   }
-  if (!seEnviaraPendienteCaja && !esCotizacion.value && comprobanteSeleccionado.value?.tipo === 'E31' && !clienteSeleccionado.value?.rnc) {
-    toast.add({ severity: 'warn', summary: 'Cliente requerido', detail: 'E31 requiere cliente con RNC', life: 3000 })
+  const tipoComprobanteVenta = normalizeEcfType(comprobanteSeleccionado.value?.tipo)
+  const clienteRnc = limpiarNumeroFiscal(clienteSeleccionado.value?.rnc)
+  if (!esCotizacion.value && saleEcfRequiresBuyer(tipoComprobanteVenta) && !/^\d{9}$/.test(clienteRnc)) {
+    toast.add({ severity: 'warn', summary: 'Cliente fiscal requerido', detail: `${tipoComprobanteVenta} requiere seleccionar un cliente con RNC valido de 9 digitos`, life: 3500 })
     return
   }
   montoRecibido.value = total.value
@@ -4296,7 +4427,7 @@ function buildAlanubePayload(ncf: string, compTipo: string, fechaStr: string, in
     },
   }
 
-  if (compTipo === 'E31') payload.buyer = buildAlanubeBuyer()
+  if (saleEcfRequiresBuyer(compTipo)) payload.buyer = buildAlanubeBuyer()
   else if (total.value >= 250000 || clienteSeleccionado.value) payload.buyer = buildAlanubeBuyer()
 
   return payload
@@ -4367,9 +4498,8 @@ async function guardarFacturaEcf(params: {
 async function enviarFacturaAlanube(facturaId: number, ncf: string, compTipo: string, fechaStr: string, invoiceNo: string) {
   if (!isDominicanFiscal.value || !facturacionElectronicaActiva.value || esCotizacion.value) return null
   if (!alanubeToken.value.trim()) throw new Error('Configura el token de Alanube antes de facturar electronicamente')
-  if (!['E31', 'E32'].includes(String(compTipo).toUpperCase())) return null
-
-  const endpoint = compTipo === 'E31' ? 'fiscal-invoices' : 'invoices'
+  const endpoint = alanubeSaleEndpoint(compTipo)
+  if (!endpoint) return null
   const url = `${alanubeBaseUrl.value.replace(/\/+$/, '')}/${endpoint}`
   const payload = buildAlanubePayload(ncf, compTipo, fechaStr, invoiceNo)
 
@@ -4433,6 +4563,15 @@ function getAlanubeResponseFromFactura(factura: any): any {
 }
 
 async function completarVenta() {
+  if (!esCotizacion.value && !puedeFinalizarFactura.value) {
+    confirmPago.value = false
+    if (esVendedorSoloHold.value && !facturaEditandoPos.value?.id) {
+      await holdearVenta(true)
+    } else {
+      toast.add({ severity: 'warn', summary: 'Acceso restringido', detail: 'Solo Caja, Administrador o Soporte pueden terminar una factura', life: 3500 })
+    }
+    return
+  }
   guardando.value = true
   await recargarConfigVentas()
   try {
@@ -4440,9 +4579,11 @@ async function completarVenta() {
     const now = new Date()
     const fechaStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     const horaStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
-
-    const esNuevaPendienteVendedor = Boolean(esVendedorPendiente.value && !esCotizacion.value && !facturaEditandoPos.value?.id)
-    if (!esNuevaPendienteVendedor && needsBankSelection.value && !bancoPosSeleccionado.value) {
+    const vendedorAsignado = vendedorComisionSeleccionado.value || {
+      id: Number(auth.user?.id || 0),
+      displayName: auth.user?.nombre || auth.user?.usuario || 'POS',
+    }
+    if (needsBankSelection.value && !bancoPosSeleccionado.value) {
       toast.add({ severity: 'warn', summary: 'Banco requerido', detail: 'Selecciona el banco destino para el pago', life: 3000 })
       guardando.value = false; return
     }
@@ -4468,7 +4609,12 @@ async function completarVenta() {
       colores: normalizarListaTextos(item.colores || item.color),
       capacidad: item.capacidad || '',
       capacidades: normalizarListaTextos(item.capacidades || item.capacidad),
+      telefono_id: item.telefono_id || null,
+      electrodomestico_id: item.electrodomestico_id || null,
+      producto_id: item.producto_id || null,
       accesorio_id: item.accesorio_id || null,
+      tipo_comision: item.tipo_comision || '',
+      valor_comision: Number(item.valor_comision || 0),
       stock: item.stock || 0,
     })))
 
@@ -4494,7 +4640,7 @@ async function completarVenta() {
     if (editandoFactura?.id && await bloquearSiFacturaElectronicaAceptada(editandoFactura, 'actualizar')) return
 
     const facturaData = {
-      turno_id: esNuevaPendienteVendedor ? 0 : turnoId,
+      turno_id: turnoId,
       almacen_id: almacenStore.activeId || 0,
       almacen_uid: almacenStore.activeUid || '',
       no_factura: invoiceNo,
@@ -4506,10 +4652,10 @@ async function completarVenta() {
       metodo_pago: metodoPago.value,
       porcentaje_tarjeta: porcentajeTarjetaFactura.value,
       monto_porcentaje_tarjeta: montoPorcentajeTarjeta.value,
-      efectivo: esNuevaPendienteVendedor ? 0 : metodoPago.value === 'EFECTIVO' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoEfectivo.value) || 0 : 0,
-      tarjeta: esNuevaPendienteVendedor ? 0 : esMetodoTarjeta(metodoPago.value) ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? montoTarjetaMixtoTotal.value : 0,
-      transferencia: esNuevaPendienteVendedor ? 0 : metodoPago.value === 'TRANSFERENCIA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? totalTransferenciasMixto() : 0,
-      cheque: esNuevaPendienteVendedor ? 0 : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoCheque.value) || 0 : 0,
+      efectivo: metodoPago.value === 'EFECTIVO' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoEfectivo.value) || 0 : 0,
+      tarjeta: esMetodoTarjeta(metodoPago.value) ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? montoTarjetaMixtoTotal.value : 0,
+      transferencia: metodoPago.value === 'TRANSFERENCIA' ? total.value : String(metodoPago.value).toLowerCase() === 'mixto' ? totalTransferenciasMixto() : 0,
+      cheque: String(metodoPago.value).toLowerCase() === 'mixto' ? Number(mixtoCheque.value) || 0 : 0,
       canal_venta: 'LOCAL',
       fecha_emision: fechaStr,
       hora: horaStr,
@@ -4525,13 +4671,13 @@ async function completarVenta() {
       costo: costoTotal.value,
       total: total.value,
       ganancia: gananciaTotal.value,
-      estado_factura: esNuevaPendienteVendedor ? 'PENDIENTE' : 'PAGADA',
+      estado_factura: 'PAGADA',
       fecha_estado: fechaStr,
       mes: String(now.getMonth() + 1),
       year: String(now.getFullYear()),
       nota: (nota.value.trim() + (notaCreditoUsada.value ? ' | ' + notaCreditoUsada.value : '')).toUpperCase(),
       usuario: auth.user?.usuario || auth.user?.nombre || 'POS',
-      vendedor: auth.user?.nombre || auth.user?.usuario || '',
+      vendedor: vendedorAsignado.displayName || vendedorAsignado.nombre || vendedorAsignado.usuario || '',
       otro: JSON.stringify({
         facturacion_electronica: facturacionElectronicaActiva.value && !esCotizacion.value ? 1 : 0,
         alanube_id_compania: facturacionElectronicaActiva.value ? alanubeIdCompania.value : '',
@@ -4554,12 +4700,6 @@ async function completarVenta() {
       tipo_comprobante: compTipo,
       comprobante_id: compId,
     }
-    if (esNuevaPendienteVendedor) {
-      facturaData.ncf = ''
-      facturaData.comprobante = ''
-      facturaData.tipo_comprobante = ''
-      facturaData.comprobante_id = 0
-    }
     if (editandoFactura?.id) {
       facturaData.ncf = editandoFactura.ncf || facturaData.ncf
       facturaData.comprobante = editandoFactura.comprobante || facturaData.comprobante
@@ -4579,7 +4719,7 @@ async function completarVenta() {
     const ventaAtomica = !(window as any).__onlineOnly && !editandoFactura?.id && !esCotizacion.value
     let resFactura: any
     if (ventaAtomica) {
-      if (!esNuevaPendienteVendedor && metodoPago.value === 'CREDITO') facturaData.estado_factura = 'CREDITO'
+      if (metodoPago.value === 'CREDITO') facturaData.estado_factura = 'CREDITO'
       const inventarioAtomico = expandirItemsInventario(cart.value).map((item: any) => {
         if (item.tipo === 'accesorio' && item.accesorio_id) {
           return { tabla: 'accesorios', id: item.accesorio_id, cantidad: Number(item.cantidad || 1) }
@@ -4599,12 +4739,12 @@ async function completarVenta() {
           },
         }
       }).filter((item: any) => item.tabla && item.id)
-      const bancosAtomicos = esNuevaPendienteVendedor ? [] : String(metodoPago.value).toLowerCase() === 'mixto'
+      const bancosAtomicos = String(metodoPago.value).toLowerCase() === 'mixto'
         ? transferenciasMixto.value.filter((t: any) => Number(t.monto || 0) > 0 && t.banco_id).map((t: any) => ({ id: t.banco_id, monto: Number(t.monto) }))
         : needsBankSelection.value && bancoPosSeleccionado.value
           ? [{ id: bancoPosSeleccionado.value, monto: Number(total.value) }]
           : []
-      const cuentaCobrarAtomica = !esNuevaPendienteVendedor && metodoPago.value === 'CREDITO' ? {
+      const cuentaCobrarAtomica = metodoPago.value === 'CREDITO' ? {
         no_factura: invoiceNo,
         cod_cliente: clienteSeleccionado.value?.id?.toString() || '',
         nombre_cliente: (clienteExpress.value || clienteSeleccionado.value?.nombre || 'CONSUMIDOR FINAL').toUpperCase(),
@@ -4620,7 +4760,7 @@ async function completarVenta() {
       resFactura = await window.electron.invoke('ventas:guardarAtomica', {
         factura: facturaData,
         cuenta_cobrar: cuentaCobrarAtomica,
-        comprobante_id: !esNuevaPendienteVendedor && comp && comp.tipo !== 'SIN' ? comp.id : 0,
+        comprobante_id: comp && comp.tipo !== 'SIN' ? comp.id : 0,
         inventario: inventarioAtomico,
         bancos: bancosAtomicos,
       })
@@ -4649,7 +4789,7 @@ async function completarVenta() {
         total_anterior: editandoFactura.total,
         total_nuevo: facturaData.total,
       }, 'OK')
-    } else if (!esNuevaPendienteVendedor && facturacionElectronicaActiva.value && !esCotizacion.value) {
+    } else if (facturacionElectronicaActiva.value && !esCotizacion.value) {
       await registrarAuditoriaFactura('crear_factura_electronica', { ...facturaData, id: facturaIdActual }, {
         ncf: facturaData.ncf,
         tipo_comprobante: facturaData.tipo_comprobante,
@@ -4657,7 +4797,7 @@ async function completarVenta() {
     }
     let alanubeResponse: any = editandoFactura?.id ? getAlanubeResponseFromFactura(editandoFactura) : null
 
-    if (!editandoFactura?.id && !esNuevaPendienteVendedor && facturacionElectronicaActiva.value && !esCotizacion.value) {
+    if (!editandoFactura?.id && facturacionElectronicaActiva.value && !esCotizacion.value) {
       try {
         alanubeResponse = await enviarFacturaAlanube(facturaIdActual, facturaData.ncf, facturaData.tipo_comprobante, fechaStr, invoiceNo)
         await registrarAuditoriaFactura('enviar_alanube', { ...facturaData, id: facturaIdActual }, {
@@ -4909,27 +5049,38 @@ async function completarVenta() {
 
     toast.add({
       severity: 'success',
-      summary: esNuevaPendienteVendedor ? 'Factura enviada a Caja' : cobrandoFacturaPendiente ? 'Factura cobrada' : editandoFactura?.id ? 'Factura actualizada' : 'Venta completada',
-      detail: esNuevaPendienteVendedor ? `Factura ${invoiceNo} pendiente de cobro` : `Factura ${invoiceNo}`,
+      summary: cobrandoFacturaPendiente ? 'Factura cobrada' : editandoFactura?.id ? 'Factura actualizada' : 'Venta completada',
+      detail: `Factura ${invoiceNo}`,
       life: 4000,
     })
 
     if (!esCotizacion.value && !editandoFactura?.id) {
       try {
-        const totalVenta = Number(total.value)
-        if (auth.user?.nombre) {
+        const sellerId = Number(vendedorAsignado.id || 0)
+        const commissionPlan = planesComision.value.find(item => Number(item.userId) === sellerId)
+        const commissionDetail = calculateSalesCommission(commissionPlan, cart.value)
+        const commissionAmount = Number(commissionDetail.reduce((sum, item) => sum + item.amount, 0).toFixed(2))
+        if (sellerId && commissionAmount > 0) {
           await (window as any).electron.invoke('db:insert', 'comisiones', {
-            factura_id: facturaIdActual, no_factura: invoiceNo,
-            vendedor: auth.user.nombre, vendedor_id: auth.user.id || 0,
-            total_venta: totalVenta, porcentaje: 0, monto: 0,
-            estado: 'PENDIENTE', almacen_id: almacenStore.activeId || 0, almacen_uid: almacenStore.activeUid || '',
+            factura_id: facturaIdActual,
+            no_factura: invoiceNo,
+            productos: JSON.stringify(commissionDetail),
+            vendedor: vendedorAsignado.displayName || vendedorAsignado.nombre || vendedorAsignado.usuario || '',
+            vendedor_id: sellerId,
+            total_venta: Number(total.value),
+            porcentaje: commissionPlan?.applyGeneral && commissionPlan.generalType === 'PERCENTAGE' ? Number(commissionPlan.generalValue || 0) : 0,
+            monto: commissionAmount,
+            estado: 'PENDIENTE',
+            usuario: auth.user?.usuario || auth.user?.nombre || 'POS',
+            almacen_id: almacenStore.activeId || 0,
+            almacen_uid: almacenStore.activeUid || '',
           })
         }
-      } catch (_) {}
-      if (!esNuevaPendienteVendedor) {
-        await asegurarQrFiscalTicket()
-        dialogPrintChoice.value = true
+      } catch (error) {
+        console.error('No se pudo generar la comision de la venta:', error)
       }
+      await asegurarQrFiscalTicket()
+      dialogPrintChoice.value = true
     }
     nota.value = ''
     limpiarCarrito()
@@ -5121,7 +5272,6 @@ onMounted(async () => {
     'f8': () => { abrirFatCoti(); sonidos.playClick() },
     'f9': () => { if (cart.value.length > 0) { limpiarCarrito(); sonidos.playClick() } },
     'f10': () => { ventaExpress(); sonidos.playClick() },
-    'f12': () => { dialogAyudaAtajos.value = !dialogAyudaAtajos.value },
     'escape': () => { if (lockScreen.isLocked) return; sonidos.playClick() },
   })
   atajosDisponibles.value = shortcuts.atajosDisponibles
@@ -5222,6 +5372,7 @@ onMounted(async () => {
     estadoPromise,
     fiscalPromise,
     cargarColumnasCards(),
+    cargarConfiguracionComisiones(),
     impresoraPromise,
     comprobantesPromise,
     metodosPagoPromise,
@@ -5827,7 +5978,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
                     <span class="w-14 h-14 rounded-2xl bg-gray-500 text-white flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform"><i class="pi pi-question-circle text-2xl"></i></span>
                     <span class="flex flex-col gap-0.5">
                       <span class="font-bold text-sm text-surface-900 dark:text-surface-50">Atajos</span>
-                      <span class="text-[11px] leading-tight text-surface-500 dark:text-surface-400">Teclas rápidas (F12)</span>
+                      <span class="text-[11px] leading-tight text-surface-500 dark:text-surface-400">Teclas rápidas</span>
                     </span>
                   </button>
                 </div>
@@ -6113,7 +6264,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
               <div class="flex items-center gap-1">
                 <Button v-if="cart.length > 0" icon="pi pi-pause-circle" severity="info" text rounded size="small" class="!w-7 !h-7" @click="holdearVenta()" v-tooltip="'Hold (Ctrl+H)'" />
                 <Button icon="pi pi-desktop" severity="secondary" text rounded size="small" class="!w-7 !h-7 hidden lg:inline-flex" @click="customerDisplay.abrirPantallaCliente(cart, total, metodoPago, clienteSeleccionado?.nombre || 'CONSUMIDOR FINAL', montoRecibido, cambio)" v-tooltip="'Pantalla cliente'" />
-                <Button label="Completar" icon="pi pi-check-circle" class="!py-1.5 !text-xs lg:!py-2.5 lg:!text-sm shadow-md" :disabled="cart.length === 0" @click="confirmarVenta" />
+                <Button :label="esVendedorSoloHold && !esCotizacion ? 'Dejar en espera' : 'Completar'" :icon="esVendedorSoloHold && !esCotizacion ? 'pi pi-pause-circle' : 'pi pi-check-circle'" class="!py-1.5 !text-xs lg:!py-2.5 lg:!text-sm shadow-md" :disabled="cart.length === 0" @click="confirmarVenta" />
               </div>
             </div>
             <div class="lg:hidden flex items-center gap-2 px-3 py-1.5">
@@ -6415,7 +6566,10 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
           >
             <div>
               <p class="font-medium text-sm">{{ cliente.nombre }}</p>
-              <p class="text-xs text-surface-400">{{ cliente.telefono || 'Sin telefono' }}</p>
+              <p class="text-xs text-surface-400">
+                {{ cliente.telefono || 'Sin telefono' }}
+                <span class="ml-1 text-primary">- {{ customerTypeLabel(cliente.tipo_cliente) }}</span>
+              </p>
             </div>
             <div class="flex items-center gap-1">
               <Button icon="pi pi-history" severity="secondary" text rounded size="small" class="!w-6 !h-6" @click.stop="clienteHistorial.abrirHistorial(cliente.id, cliente.nombre)" v-tooltip="'Ver historial de compras'" />
@@ -6443,6 +6597,16 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Nombre <span class="text-red-400">*</span></label>
           <InputText v-model="nuevoClienteForm.nombre" placeholder="Nombre del cliente" fluid class="uppercase" style="text-transform: uppercase;" />
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="font-semibold text-sm">Tipo de cliente</label>
+          <Select
+            v-model="nuevoClienteForm.tipo_cliente"
+            :options="CUSTOMER_TYPE_OPTIONS"
+            optionLabel="label"
+            optionValue="value"
+            fluid
+          />
         </div>
         <div class="flex flex-col gap-1">
           <label class="font-semibold text-sm">Telefono</label>
@@ -6630,15 +6794,23 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
             <Button icon="pi pi-times" severity="secondary" text rounded size="small" class="!w-5 !h-5" @click="clienteSeleccionado = null" v-tooltip="'Quitar cliente'" />
           </span>
         </div>
-        <div v-if="esVendedorPendiente && !facturaEditandoPos" class="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-300">
-          <div class="font-semibold flex items-center gap-2"><i class="pi pi-send"></i>Esta factura se enviará pendiente a Caja</div>
-          <div class="text-xs mt-1">El cajero seleccionará el método de pago y completará el cobro.</div>
+        <div v-if="!esCotizacion" class="flex flex-col gap-1 border-t border-surface-100 dark:border-surface-700 pt-2">
+          <label class="text-xs font-semibold">Vendedor asignado</label>
+          <Select v-model="vendedorComisionId" :options="vendedoresComision" optionLabel="displayName" optionValue="id" filter placeholder="Seleccionar vendedor" fluid />
+          <div class="flex justify-between text-xs" :class="planVendedorSeleccionado?.enabled ? 'text-emerald-600' : 'text-surface-400'">
+            <span>{{ planVendedorSeleccionado?.enabled ? 'Comision estimada' : 'Sin plan de comision activo' }}</span>
+            <strong v-if="planVendedorSeleccionado?.enabled">{{ formatMoney(comisionEstimada) }}</strong>
+          </div>
+        </div>
+        <div v-if="esVendedorSoloHold && !facturaEditandoPos" class="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-300">
+          <div class="font-semibold flex items-center gap-2"><i class="pi pi-send"></i>Esta venta se guardará en espera para Caja</div>
+          <div class="text-xs mt-1">Caja, Administrador o Soporte seleccionarán el método de pago y completarán el cobro.</div>
         </div>
         <div v-else class="flex justify-between text-sm">
           <span>Metodo de Pago</span>
           <span>{{ metodoPago }}</span>
         </div>
-        <div v-if="needsBankSelection && !(esVendedorPendiente && !facturaEditandoPos)" class="flex flex-col gap-1">
+        <div v-if="needsBankSelection && !(esVendedorSoloHold && !facturaEditandoPos)" class="flex flex-col gap-1">
           <label class="text-xs font-semibold">Banco destino</label>
           <Select
             v-model="bancoPosSeleccionado"
@@ -6666,7 +6838,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
       </div>
       <template #footer>
         <Button label="Cancelar" severity="secondary" text @click="confirmPago = false" />
-        <Button :label="facturaEditandoPos ? (esFacturaPendiente(facturaEditandoPos) ? 'Cobrar Factura' : 'Actualizar Factura') : esVendedorPendiente ? 'Enviar a Caja' : 'Completar Venta'" icon="pi pi-check" :loading="guardando" @click="completarVenta" />
+        <Button :label="facturaEditandoPos ? (esFacturaPendiente(facturaEditandoPos) ? 'Cobrar Factura' : 'Actualizar Factura') : esVendedorSoloHold ? 'Guardar en espera' : 'Completar Venta'" icon="pi pi-check" :loading="guardando" @click="completarVenta" />
       </template>
     </Dialog>
 
@@ -6846,7 +7018,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
       <template #footer>
         <div class="w-full flex flex-wrap items-center justify-end gap-2">
           <Button
-            v-if="registroFatCotiSeleccionado && esFacturaPendiente() && (auth.isCajero || auth.isAdmin || auth.isGerente)"
+            v-if="registroFatCotiSeleccionado && esFacturaPendiente() && puedeFinalizarFactura"
             label="Cobrar factura"
             icon="pi pi-dollar"
             severity="success"
@@ -7641,6 +7813,56 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
     <TicketTallerPrint ref="ticketTallerRef" />
 
     <Dialog
+      v-model:visible="compartiendoWhatsapp"
+      modal
+      :closable="false"
+      :closeOnEscape="false"
+      :draggable="false"
+      :showHeader="false"
+      :style="{ width: 'min(30rem, 92vw)' }"
+    >
+      <div class="px-2 py-5 sm:px-5">
+        <div class="flex flex-col items-center text-center">
+          <div class="relative mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-950/40">
+            <i class="pi pi-whatsapp text-4xl text-emerald-500"></i>
+            <span class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full border-4 border-surface-0 bg-primary text-primary-contrast dark:border-surface-800">
+              <i class="pi pi-spin pi-spinner text-sm"></i>
+            </span>
+          </div>
+          <span class="mb-2 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">Compartiendo factura</span>
+          <h3 class="text-xl font-bold text-surface-900 dark:text-surface-0">{{ etapasCompartirWhatsapp[whatsappPaso].titulo }}</h3>
+          <p class="mt-2 min-h-10 text-sm leading-5 text-surface-500">{{ whatsappDetalle }}</p>
+        </div>
+
+        <div class="my-6 h-2 overflow-hidden rounded-full bg-surface-100 dark:bg-surface-700">
+          <div class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600 transition-all duration-500" :style="{ width: `${((whatsappPaso + 1) / etapasCompartirWhatsapp.length) * 100}%` }"></div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <div v-for="(etapa, index) in etapasCompartirWhatsapp" :key="etapa.titulo" class="flex flex-col items-center gap-2 text-center">
+            <span
+              class="flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold transition-colors"
+              :class="index < whatsappPaso
+                ? 'border-emerald-500 bg-emerald-500 text-white'
+                : index === whatsappPaso
+                  ? 'border-primary bg-primary text-primary-contrast'
+                  : 'border-surface-300 text-surface-400 dark:border-surface-600'"
+            >
+              <i v-if="index < whatsappPaso" class="pi pi-check text-xs"></i>
+              <span v-else>{{ index + 1 }}</span>
+            </span>
+            <span class="text-[11px] font-medium" :class="index <= whatsappPaso ? 'text-surface-700 dark:text-surface-200' : 'text-surface-400'">{{ etapa.titulo }}</span>
+          </div>
+        </div>
+
+        <div class="mt-6 flex items-center justify-center gap-2 rounded-lg bg-surface-50 px-3 py-2 text-xs text-surface-500 dark:bg-surface-700/40">
+          <i class="pi pi-info-circle"></i>
+          No cierres la aplicacion mientras se prepara el archivo.
+        </div>
+      </div>
+    </Dialog>
+
+    <Dialog
       v-model:visible="dialogPrintChoice"
       header="Imprimir"
       modal
@@ -7994,7 +8216,7 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <span class="font-bold text-sm text-primary">{{ formatMoney(hold.total) }}</span>
-            <Button icon="pi pi-undo" severity="info" text rounded size="small" class="!w-7 !h-7" @click="recallHold(hold)" v-tooltip="'Recuperar venta'" />
+            <Button v-if="puedeFinalizarFactura" icon="pi pi-undo" severity="info" text rounded size="small" class="!w-7 !h-7" @click="recallHold(hold)" v-tooltip="'Recuperar venta'" />
             <Button icon="pi pi-trash" severity="danger" text rounded size="small" class="!w-7 !h-7" @click="holdRecall.eliminarHold(hold.id)" v-tooltip="'Eliminar'" />
           </div>
         </div>
@@ -8328,8 +8550,8 @@ function productCardStyle(tipo: 'telefono' | 'accesorio' | 'electrodomestico', s
       </div>
     </div>
 
-    <!-- ==================== AYUDA / ATAJOS (F12) ==================== -->
-    <Dialog v-model:visible="dialogAyudaAtajos" header="Atajos de teclado (F12)" modal :style="{ width: 'min(32rem, 95vw)' }">
+    <!-- ==================== AYUDA / ATAJOS ==================== -->
+    <Dialog v-model:visible="dialogAyudaAtajos" header="Atajos de teclado" modal :style="{ width: 'min(32rem, 95vw)' }">
       <div class="grid grid-cols-2 gap-2">
         <div v-for="atajo in atajosDisponibles" :key="atajo.tecla" class="flex items-center gap-2 p-2 rounded-lg bg-surface-50 dark:bg-surface-700/30 text-sm">
           <span class="font-mono font-bold text-xs px-1.5 py-0.5 rounded bg-surface-200 dark:bg-surface-600 text-surface-700 dark:text-surface-200 min-w-[4rem] text-center">{{ atajo.tecla }}</span>

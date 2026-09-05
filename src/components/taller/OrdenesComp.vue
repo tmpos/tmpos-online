@@ -82,6 +82,7 @@ const creandoFactura = ref(false)
 const deleteOtpEmail = ref('')
 const deleteOtpError = ref('')
 const busqueda = ref(String(route.query.search || ''))
+const estadoFiltro = ref('PENDIENTES')
 const activeTab = ref('0')
 const ticketTallerRef = ref<any>(null)
 const dialogEtiquetaTaller = ref(false)
@@ -228,6 +229,18 @@ const estadosOrden = [
   { label: 'Cancelado', value: 'CANCELADO' },
 ]
 
+const estadosFiltro = [
+  { label: 'Pendientes', value: 'PENDIENTES' },
+  { label: 'Todos los estados', value: 'TODOS' },
+  { label: 'Entregados', value: 'ENTREGADO' },
+  { label: 'Recibido', value: 'RECIBIDO' },
+  { label: 'En Proceso', value: 'EN_PROCESO' },
+  { label: 'Completado', value: 'COMPLETADO' },
+  { label: 'Reparado', value: 'REPARADO' },
+  { label: 'Parcial', value: 'PARCIAL' },
+  { label: 'Cancelado', value: 'CANCELADO' },
+]
+
 const estadosPagoTecnico = [
   { label: 'Pendiente', value: 'PENDIENTE' },
   { label: 'Pagado', value: 'PAGADO' },
@@ -299,19 +312,41 @@ const formDefault = () => ({
 const form = ref(formDefault())
 
 // ─── Computados ───
+const ESTADO_ORDEN_ALIASES: Record<string, string> = {
+  PENDIENTE: 'RECIBIDO',
+  PROCESO: 'EN_PROCESO',
+  EN_PROGRESO: 'EN_PROCESO',
+  REPARACION: 'EN_PROCESO',
+  TERMINADO: 'COMPLETADO',
+  FINALIZADO: 'COMPLETADO',
+  ENTREGADA: 'ENTREGADO',
+  ENTREGADO_AL_CLIENTE: 'ENTREGADO',
+  DESPACHADO: 'ENTREGADO',
+  CANCELADA: 'CANCELADO',
+}
+
+function normalizarEstadoOrden(value: unknown): string {
+  const estado = String(value || 'RECIBIDO')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return ESTADO_ORDEN_ALIASES[estado] || estado || 'RECIBIDO'
+}
+
 const ordenesFiltradas = computed(() => {
   const texto = busqueda.value.toLowerCase().trim()
-  if (!texto) return ordenes.value
-  return ordenes.value.filter(o =>
-    o.nombre?.toLowerCase().includes(texto) ||
-    o.cedula?.toLowerCase().includes(texto) ||
-    o.telefono?.toLowerCase().includes(texto) ||
-    o.equipo?.toLowerCase().includes(texto) ||
-    o.imei?.toLowerCase().includes(texto) ||
-    o.serial?.toLowerCase().includes(texto) ||
-    o.tecnico?.toLowerCase().includes(texto) ||
-    String(o.id).includes(texto)
-  )
+  return ordenes.value.filter(o => {
+    const estado = normalizarEstadoOrden(o.estado)
+    const coincideEstado = estadoFiltro.value === 'TODOS'
+      || (estadoFiltro.value === 'PENDIENTES' ? !['ENTREGADO', 'CANCELADO'].includes(estado) : estado === estadoFiltro.value)
+    if (!coincideEstado) return false
+    if (!texto) return true
+    return [o.nombre, o.cedula, o.telefono, o.equipo, o.imei, o.serial, o.tecnico, o.no_orden, o.id]
+      .some(valor => String(valor || '').toLowerCase().includes(texto))
+  })
 })
 
 const ordenesParaEliminar = computed(() => {
@@ -901,15 +936,20 @@ function mensajeNotaPorEstado(estado: string) {
   }
 }
 
-function enviarWhatsappEstado() {
+async function enviarWhatsappEstado() {
   const telefono = normalizarTelefonoWhatsapp(whatsappTelefono.value)
   if (!telefono) {
     toast.add({ severity: 'warn', summary: 'Telefono requerido', detail: 'Agrega un telefono valido para WhatsApp', life: 3000 })
     return
   }
-  const mensaje = encodeURIComponent(generarMensajeWhatsappEstado(ordenWhatsappEstado.value, whatsappEstadoNuevo.value, whatsappNota.value))
-  window.open(`https://wa.me/${telefono}?text=${mensaje}`, '_blank')
-  dialogWhatsappEstado.value = false
+  const mensaje = generarMensajeWhatsappEstado(ordenWhatsappEstado.value, whatsappEstadoNuevo.value, whatsappNota.value)
+  try {
+    const resultado = await window.electron.invoke('whatsapp:open', { telefono, mensaje })
+    if (resultado?.success === false) throw new Error(resultado.error || 'No se pudo abrir WhatsApp')
+    dialogWhatsappEstado.value = false
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'WhatsApp', detail: error?.message || 'No se pudo abrir WhatsApp en esta computadora', life: 4000 })
+  }
 }
 
 async function onOrdenGuardada(payload?: any) {
@@ -1341,6 +1381,14 @@ defineExpose({ cargarOrdenes })
             <InputText v-model="busqueda" placeholder="Buscar orden..." />
           </IconField>
           <div class="flex items-center gap-2">
+            <Select
+              v-model="estadoFiltro"
+              :options="estadosFiltro"
+              optionLabel="label"
+              optionValue="value"
+              placeholder="Estado"
+              class="w-48"
+            />
             <label class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
               <ToggleSwitch v-model="verTodosAlmacenes" />
               Todos los almacenes

@@ -31,6 +31,12 @@ const cuentas = ref<any[]>([])
 const loading = ref(false)
 const busqueda = ref('')
 const filtroEstado = ref('ACTIVA')
+const filtroCliente = ref('')
+const filtroPeriodo = ref<'TODAS' | 'HOY' | 'SEMANA' | 'MES' | 'RANGO'>('TODAS')
+const fechaDesde = ref('')
+const fechaHasta = ref('')
+const filtroVencimiento = ref('TODOS')
+const filtroSaldo = ref('TODOS')
 const verTodosAlmacenes = ref(false)
 
 const selectedCuentas = ref<any[]>([])
@@ -176,15 +182,140 @@ const estados = [
   { label: 'Pagada', value: 'PAGADA' },
   { label: 'Vencida', value: 'VENCIDA' },
 ]
+const periodos = [
+  { label: 'Todas las fechas', value: 'TODAS' },
+  { label: 'Hoy', value: 'HOY' },
+  { label: 'Esta semana', value: 'SEMANA' },
+  { label: 'Este mes', value: 'MES' },
+  { label: 'Rango personalizado', value: 'RANGO' },
+]
+const vencimientos = [
+  { label: 'Todos', value: 'TODOS' },
+  { label: 'Vencidas', value: 'VENCIDAS' },
+  { label: 'Vencen hoy', value: 'HOY' },
+  { label: 'Proximos 7 dias', value: '7_DIAS' },
+  { label: 'Proximos 30 dias', value: '30_DIAS' },
+  { label: 'Sin vencimiento', value: 'SIN_FECHA' },
+]
+const saldos = [
+  { label: 'Todos', value: 'TODOS' },
+  { label: 'Con saldo pendiente', value: 'PENDIENTE' },
+  { label: 'Sin ningun abono', value: 'SIN_ABONOS' },
+  { label: 'Con abonos parciales', value: 'CON_ABONOS' },
+  { label: 'Saldadas', value: 'SALDADA' },
+]
+
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function accountDateKey(value: any): string {
+  const raw = String(value || '').trim()
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (match) return match[1]
+  const parsed = new Date(raw)
+  return Number.isNaN(parsed.getTime()) ? '' : localDateKey(parsed)
+}
+
+function effectiveStatus(cuenta: any): string {
+  if (Number(cuenta?.saldo || 0) <= 0) return 'PAGADA'
+  const due = accountDateKey(cuenta?.fecha_vencimiento)
+  if (due && due < localDateKey(new Date())) return 'VENCIDA'
+  return String(cuenta?.estado || 'ACTIVA').toUpperCase()
+}
+
+function applyAccountPeriod(period = filtroPeriodo.value) {
+  if (period === 'RANGO') return
+  if (period === 'TODAS') {
+    fechaDesde.value = ''
+    fechaHasta.value = ''
+    return
+  }
+  const today = new Date()
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  if (period === 'SEMANA') {
+    const day = start.getDay() || 7
+    start.setDate(start.getDate() - day + 1)
+  } else if (period === 'MES') {
+    start.setDate(1)
+  }
+  fechaDesde.value = localDateKey(start)
+  fechaHasta.value = localDateKey(today)
+}
+
+watch(filtroPeriodo, applyAccountPeriod)
+applyAccountPeriod('TODAS')
+
+const clientesFiltro = computed(() => [...new Set(cuentas.value
+  .map(cuenta => String(cuenta.nombre_cliente || '').trim())
+  .filter(Boolean))]
+  .sort((a, b) => a.localeCompare(b, 'es'))
+  .map(nombre => ({ label: nombre, value: nombre })))
 
 const cuentasFiltradas = computed(() => {
+  const today = localDateKey(new Date())
+  const inSevenDays = new Date()
+  inSevenDays.setDate(inSevenDays.getDate() + 7)
+  const inThirtyDays = new Date()
+  inThirtyDays.setDate(inThirtyDays.getDate() + 30)
   let data = cuentas.value
-  if (busqueda.value) data = data.filter(c => matchesSearch(c, busqueda.value, ['nombre_cliente', 'no_factura', 'telefono_cliente', 'cod_cliente', 'estado']))
-  if (filtroEstado.value) {
-    data = data.filter(c => c.estado === filtroEstado.value)
+
+  if (busqueda.value) data = data.filter(cuenta => matchesSearch(cuenta, busqueda.value, ['nombre_cliente', 'no_factura', 'telefono_cliente', 'cod_cliente', 'estado']))
+  if (filtroEstado.value) data = data.filter(cuenta => effectiveStatus(cuenta) === filtroEstado.value)
+  if (filtroCliente.value) data = data.filter(cuenta => String(cuenta.nombre_cliente || '').trim() === filtroCliente.value)
+  if (fechaDesde.value || fechaHasta.value) {
+    data = data.filter(cuenta => {
+      const date = accountDateKey(cuenta.fecha_venta || cuenta.created_at)
+      if (fechaDesde.value && (!date || date < fechaDesde.value)) return false
+      if (fechaHasta.value && (!date || date > fechaHasta.value)) return false
+      return true
+    })
   }
-  return data
+  if (filtroVencimiento.value !== 'TODOS') {
+    data = data.filter(cuenta => {
+      const due = accountDateKey(cuenta.fecha_vencimiento)
+      const pending = Number(cuenta.saldo || 0) > 0
+      if (filtroVencimiento.value === 'SIN_FECHA') return !due
+      if (!due || !pending) return false
+      if (filtroVencimiento.value === 'VENCIDAS') return due < today
+      if (filtroVencimiento.value === 'HOY') return due === today
+      if (filtroVencimiento.value === '7_DIAS') return due > today && due <= localDateKey(inSevenDays)
+      if (filtroVencimiento.value === '30_DIAS') return due > today && due <= localDateKey(inThirtyDays)
+      return true
+    })
+  }
+  if (filtroSaldo.value !== 'TODOS') {
+    data = data.filter(cuenta => {
+      const balance = Number(cuenta.saldo || 0)
+      const paid = Number(cuenta.abonado || 0)
+      if (filtroSaldo.value === 'PENDIENTE') return balance > 0
+      if (filtroSaldo.value === 'SIN_ABONOS') return balance > 0 && paid <= 0
+      if (filtroSaldo.value === 'CON_ABONOS') return balance > 0 && paid > 0
+      if (filtroSaldo.value === 'SALDADA') return balance <= 0
+      return true
+    })
+  }
+  return data.slice().sort((a, b) => `${accountDateKey(b.fecha_venta || b.created_at)} ${Number(b.id || 0)}`.localeCompare(`${accountDateKey(a.fecha_venta || a.created_at)} ${Number(a.id || 0)}`))
 })
+
+const resumenFiltrado = computed(() => cuentasFiltradas.value.reduce((acc, cuenta) => {
+  acc.total += Number(cuenta.total || 0)
+  acc.abonado += Number(cuenta.abonado || 0)
+  acc.saldo += Number(cuenta.saldo || 0)
+  return acc
+}, { total: 0, abonado: 0, saldo: 0 }))
+
+function limpiarFiltros() {
+  busqueda.value = ''
+  filtroEstado.value = ''
+  filtroCliente.value = ''
+  filtroPeriodo.value = 'TODAS'
+  fechaDesde.value = ''
+  fechaHasta.value = ''
+  filtroVencimiento.value = 'TODOS'
+  filtroSaldo.value = 'TODOS'
+  selectedCuentas.value = []
+}
 
 const cuentasParaEliminar = computed(() => {
   if (cuentaParaEliminar.value) return [cuentaParaEliminar.value]
@@ -738,7 +869,40 @@ async function imprimirEstadoCuenta(cuenta: any) {
   await ticketRef.value?.printTicket(cuenta, 0, cuenta.abonado || 0, cuenta.saldo || 0)
 }
 
-function enviarWhatsApp(cuenta: any) {
+function normalizarTelefonoWhatsApp(valor: any): string {
+  const local = String(valor || '').replace(/\D/g, '')
+  return local.length === 10 ? `1${local}` : local
+}
+
+async function abrirEnWhatsApp(telefonoRaw: string, mensaje: string) {
+  const telefono = normalizarTelefonoWhatsApp(telefonoRaw)
+  if (!/^\d{7,15}$/.test(telefono)) {
+    toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'El telefono no es valido', life: 3000 })
+    return
+  }
+
+  const esNavegador = Boolean((window as any).__isNetworkClient || (window as any).__isCapacitor)
+  if (esNavegador) {
+    const url = `https://wa.me/${encodeURIComponent(telefono)}?text=${encodeURIComponent(mensaje)}`
+    const link = document.createElement('a')
+    link.href = url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    return
+  }
+
+  try {
+    const result = await window.electron.invoke('whatsapp:open', { telefono, mensaje }) as any
+    if (result?.success === false) throw new Error(result.error || 'No se pudo abrir WhatsApp')
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'WhatsApp', detail: error?.message || 'No se pudo abrir WhatsApp', life: 4000 })
+  }
+}
+
+async function enviarWhatsApp(cuenta: any) {
   const telefono = String(cuenta.telefono_cliente || '').replace(/\D/g, '')
   if (!telefono) {
     cuentaTelefonoPendiente.value = cuenta
@@ -746,13 +910,19 @@ function enviarWhatsApp(cuenta: any) {
     dialogTelefono.value = true
     return
   }
-  abrirWhatsApp(cuenta, telefono, '*ESTADO DE CUENTA*')
+  await abrirWhatsApp(cuenta, telefono, '*ESTADO DE CUENTA*')
 }
 
-function abrirWhatsApp(cuenta: any, telefono: string, encabezado: string) {
-  const abonos = pagosHistorialParsed.value || []
-  const historial = abonos.map((p: any, i: number) => `${i + 1}. $${formatCurrency(p.cantidad)} - ${p.fecha || ''} ${p.hora || ''}`).join('\n')
-  const msg = [
+async function abrirWhatsApp(cuenta: any, telefono: string, encabezado: string) {
+  let abonos: any[] = []
+  try {
+    const parsed = typeof cuenta?.pagos === 'string' ? JSON.parse(cuenta.pagos || '[]') : cuenta?.pagos
+    abonos = Array.isArray(parsed) ? parsed : []
+  } catch {
+    abonos = []
+  }
+  const historial = abonos.map((p: any, i: number) => `${i + 1}. $${formatCurrency(p.cantidad || p.monto)} - ${p.fecha || ''} ${p.hora || ''}`).join('\n')
+  const mensaje = [
     encabezado,
     '',
     `Cliente: ${cuenta.nombre_cliente || ''}`,
@@ -765,10 +935,10 @@ function abrirWhatsApp(cuenta: any, telefono: string, encabezado: string) {
     '',
     'Gracias por su preferencia.',
   ].filter(Boolean).join('\n')
-  window.open(`https://wa.me/${telefono}?text=${encodeURIComponent(msg)}`, '_blank')
+  await abrirEnWhatsApp(telefono, mensaje)
 }
 
-function notificarCliente(cuenta: any) {
+async function notificarCliente(cuenta: any) {
   const telefono = String(cuenta.telefono_cliente || '').replace(/\D/g, '')
   if (!telefono) {
     cuentaTelefonoPendiente.value = { ...cuenta, _notificar: true }
@@ -776,7 +946,7 @@ function notificarCliente(cuenta: any) {
     dialogTelefono.value = true
     return
   }
-  const msg = [
+  const mensaje = [
     '*RECORDATORIO DE PAGO*',
     '',
     `Hola ${cuenta.nombre_cliente || ''},`,
@@ -785,7 +955,7 @@ function notificarCliente(cuenta: any) {
     'Te recordamos realizar tu pago lo antes posible.',
     'Gracias.',
   ].filter(Boolean).join('\n')
-  window.open(`https://wa.me/${telefono}?text=${encodeURIComponent(msg)}`, '_blank')
+  await abrirEnWhatsApp(telefono, mensaje)
 }
 
 async function confirmarTelefonoEnviar() {
@@ -796,17 +966,17 @@ async function confirmarTelefonoEnviar() {
   }
   const cuenta = cuentaTelefonoPendiente.value
   if (!cuenta) return
-  try {
-    await window.db.update('cuentas_cobrar', cuenta.id, { telefono_cliente: tel })
-    cuenta.telefono_cliente = tel
-  } catch (_) {}
-  if (cuenta._notificar) {
-    notificarCliente(cuenta)
-  } else {
-    abrirWhatsApp(cuenta, tel, '*ESTADO DE CUENTA*')
-  }
+
+  cuenta.telefono_cliente = tel
   dialogTelefono.value = false
   cuentaTelefonoPendiente.value = null
+
+  if (cuenta._notificar) await notificarCliente(cuenta)
+  else await abrirWhatsApp(cuenta, tel, '*ESTADO DE CUENTA*')
+
+  try {
+    await window.db.update('cuentas_cobrar', cuenta.id, { telefono_cliente: tel })
+  } catch (_) {}
 }
 
 async function cambiarEstado(cuenta: any, estado: string) {
@@ -831,28 +1001,42 @@ watch(metodoPago, (metodo) => {
     <TicketCuentaCobrarPrint ref="ticketRef" />
 
     <Fieldset legend="Cuentas por Cobrar">
-      <div class="flex items-center justify-between mb-4 gap-2 flex-wrap">
-        <div class="flex items-center gap-2">
-          <span class="p-input-icon-left">
-            <i class="pi pi-search"></i>
-            <InputText v-model="busqueda" placeholder="Buscar factura o cliente..." />
-          </span>
-          <Select v-model="filtroEstado" :options="estados" optionLabel="label" optionValue="value" placeholder="Estado" class="w-32" fluid />
+      <div class="mb-4 space-y-4">
+        <div class="rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50/60 dark:bg-surface-900 p-4 space-y-3">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2 font-semibold"><i class="pi pi-filter text-primary"></i>Filtros de cuentas por cobrar</div>
+            <Button label="Limpiar filtros" icon="pi pi-filter-slash" severity="secondary" text size="small" @click="limpiarFiltros" />
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div class="flex flex-col gap-1"><label class="text-xs font-semibold">Buscar</label><span class="p-input-icon-left"><i class="pi pi-search"></i><InputText v-model="busqueda" placeholder="Factura, cliente, telefono..." fluid /></span></div>
+            <div class="flex flex-col gap-1"><label class="text-xs font-semibold">Estado</label><Select v-model="filtroEstado" :options="estados" optionLabel="label" optionValue="value" fluid /></div>
+            <div class="flex flex-col gap-1"><label class="text-xs font-semibold">Cliente</label><Select v-model="filtroCliente" :options="clientesFiltro" optionLabel="label" optionValue="value" filter showClear placeholder="Todos los clientes" fluid /></div>
+            <div class="flex flex-col gap-1"><label class="text-xs font-semibold">Fecha de venta</label><Select v-model="filtroPeriodo" :options="periodos" optionLabel="label" optionValue="value" fluid /></div>
+            <div v-if="filtroPeriodo === 'RANGO'" class="flex flex-col gap-1"><label class="text-xs font-semibold">Desde</label><InputText v-model="fechaDesde" type="date" fluid /></div>
+            <div v-if="filtroPeriodo === 'RANGO'" class="flex flex-col gap-1"><label class="text-xs font-semibold">Hasta</label><InputText v-model="fechaHasta" type="date" fluid /></div>
+            <div class="flex flex-col gap-1"><label class="text-xs font-semibold">Vencimiento</label><Select v-model="filtroVencimiento" :options="vencimientos" optionLabel="label" optionValue="value" fluid /></div>
+            <div class="flex flex-col gap-1"><label class="text-xs font-semibold">Situacion del saldo</label><Select v-model="filtroSaldo" :options="saldos" optionLabel="label" optionValue="value" fluid /></div>
+          </div>
+          <div v-if="fechaDesde || fechaHasta" class="text-xs text-surface-500">Periodo de venta: <strong>{{ fechaDesde || 'inicio' }}</strong> al <strong>{{ fechaHasta || 'hoy' }}</strong></div>
         </div>
-        <div class="flex items-center gap-2">
+
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div class="rounded-xl border border-surface-200 dark:border-surface-700 p-3"><div class="text-xs text-surface-500">Cuentas visibles</div><div class="text-xl font-bold">{{ cuentasFiltradas.length }}</div></div>
+          <div class="rounded-xl bg-blue-600 p-3 text-white"><div class="text-xs text-blue-100">Total facturado</div><div class="text-lg font-bold">{{ $formatMoney(resumenFiltrado.total) }}</div></div>
+          <div class="rounded-xl bg-emerald-600 p-3 text-white"><div class="text-xs text-emerald-100">Total abonado</div><div class="text-lg font-bold">{{ $formatMoney(resumenFiltrado.abonado) }}</div></div>
+          <div class="rounded-xl bg-red-600 p-3 text-white"><div class="text-xs text-red-100">Saldo pendiente</div><div class="text-lg font-bold">{{ $formatMoney(resumenFiltrado.saldo) }}</div></div>
+        </div>
+
+        <div class="flex items-center justify-between gap-2 flex-wrap">
           <label class="flex items-center gap-2 rounded-lg border border-surface-200 dark:border-surface-700 px-3 py-2 cursor-pointer text-sm text-surface-500">
             <ToggleSwitch v-model="verTodosAlmacenes" />
             Todos los almacenes
           </label>
-          <Button v-if="selectedCuentas.length" :label="`Cambiar almacén (${selectedCuentas.length})`" icon="pi pi-warehouse" severity="success" @click="abrirMoverAlmacen" />
-          <Button
-            v-if="selectedCuentas.length"
-            :label="`Eliminar (${selectedCuentas.length})`"
-            icon="pi pi-trash"
-            severity="danger"
-            @click="confirmarBorrarSeleccionadas"
-          />
-          <Button label="Actualizar" icon="pi pi-refresh" severity="secondary" @click="cargarCuentas" />
+          <div class="flex items-center gap-2 flex-wrap">
+            <Button v-if="selectedCuentas.length" :label="`Cambiar almacen (${selectedCuentas.length})`" icon="pi pi-warehouse" severity="success" @click="abrirMoverAlmacen" />
+            <Button v-if="selectedCuentas.length" :label="`Eliminar (${selectedCuentas.length})`" icon="pi pi-trash" severity="danger" @click="confirmarBorrarSeleccionadas" />
+            <Button label="Actualizar" icon="pi pi-refresh" severity="secondary" @click="cargarCuentas" />
+          </div>
         </div>
       </div>
 
@@ -887,12 +1071,15 @@ watch(metodoPago, (metodo) => {
             <span :class="data.saldo > 0 ? 'text-red-600 font-bold' : 'text-green-600'">{{ $formatMoney(data.saldo) }}</span>
           </template>
         </Column>
-        <Column field="fecha_venta" header="Fecha" sortable style="width: 7rem">
+        <Column field="fecha_venta" header="Venta" sortable style="width: 7rem">
           <template #body="{ data }">{{ formatFecha(data.fecha_venta) }}</template>
+        </Column>
+        <Column field="fecha_vencimiento" header="Vencimiento" sortable style="width: 8rem">
+          <template #body="{ data }"><span :class="effectiveStatus(data) === 'VENCIDA' ? 'text-red-600 font-semibold' : ''">{{ formatFecha(data.fecha_vencimiento) || '-' }}</span></template>
         </Column>
         <Column field="estado" header="Estado" sortable style="width: 7rem">
           <template #body="{ data }">
-            <Tag :value="data.estado" :severity="getEstadoSeverity(data.estado)" />
+            <Tag :value="effectiveStatus(data)" :severity="getEstadoSeverity(effectiveStatus(data))" />
           </template>
         </Column>
 
@@ -1093,7 +1280,7 @@ watch(metodoPago, (metodo) => {
       </template>
     </Dialog>
 
-    <Dialog v-model:visible="dialogTelefono" header="Telefono del cliente" modal :style="{ width: '90%', maxWidth: '400px' }">
+    <Dialog v-model:visible="dialogTelefono" header="Telefono del cliente" modal :style="{ width: 'min(26rem, calc(100vw - 2rem))' }" :draggable="false">
       <div class="space-y-3">
         <p class="text-sm text-surface-500">El cliente no tiene telefono registrado. Ingresa el numero para enviar por WhatsApp:</p>
         <InputText v-model="telefonoInput" placeholder="8095551234" fluid @keydown.enter="confirmarTelefonoEnviar" />

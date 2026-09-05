@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, safeStorage, session } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog, safeStorage, session, shell } from 'electron'
 import { join } from 'path'
 import { exec, execSync, spawn } from 'child_process'
 import path from 'path'
@@ -277,7 +277,9 @@ async function fetchOnlineTableFromApi(table: string): Promise<any[]> {
 
 async function fetchOnlineTable(tableValue: unknown): Promise<any[]> {
   const table = validOnlineTable(tableValue)
-  const cached = onlineTableLastGoodRows.get(table)
+  // Los permisos y el estado de los usuarios siempre deben venir frescos de la API.
+  // Tampoco se usa una copia anterior si falla la conexion.
+  const cached = table === 'usuarios' ? undefined : onlineTableLastGoodRows.get(table)
   if (cached && Date.now() - cached.fetchedAt < ONLINE_TABLE_CACHE_TTL_MS) return cached.rows
 
   const pending = onlineTableFetches.get(table)
@@ -550,6 +552,27 @@ async function callOnlineRuntime(action: string, data: Record<string, any>): Pro
     try { return await handleOnlineDbAction(action, data) }
     catch (error: any) { return { success: false, error: error?.message || 'No se pudo consultar TM Cloud' } }
   }
+  if (action === 'cuadres/listar') {
+    try {
+      // Esta ruta prepara y consulta exclusivamente la tabla remota de TM Cloud.
+      const response = await handleOnlineDbAction('db/getAll', { tabla: 'cuadres' })
+      const almacenUid = String(data?.almacenUid || '')
+      const desde = String(data?.desde || '')
+      const hasta = String(data?.hasta || '')
+      const requestedLimit = Number(data?.limit || 0)
+      const rows = (response?.data || [])
+        .filter((row: any) => {
+          const sameStore = !almacenUid || !row.almacen_uid || String(row.almacen_uid) === almacenUid
+          const date = String(row.created_at || row.fecha || '').slice(0, 10)
+          return sameStore && (!desde || date >= desde) && (!hasta || date <= hasta)
+        })
+        .sort((a: any, b: any) => String(b.created_at || b.fecha || '').localeCompare(String(a.created_at || a.fecha || '')))
+      const limit = desde || hasta ? 0 : Math.max(0, Math.min(requestedLimit, 100))
+      return { success: true, data: limit ? rows.slice(0, limit) : rows }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'No se pudieron cargar los cuadres desde TM Cloud' }
+    }
+  }
   if (action === 'invoke' && ['caja:getTurnoActivo', 'caja:getTurnoAbierto'].includes(String(data?.channel || ''))) {
     try {
       const almacenUid = String(data?.args?.[0] || '')
@@ -572,6 +595,66 @@ async function callOnlineRuntime(action: string, data: Record<string, any>): Pro
     try { return await handleOnlineDbAction('db/update', { tabla: 'caja_turnos', id: data?.args?.[0], data: { ...(data?.args?.[1] || {}), estado: 'cerrado' } }) }
     catch (error: any) { return { success: false, error: error?.message || 'No se pudo cerrar el turno' } }
   }
+  if (action === 'invoke' && String(data?.channel || '') === 'ventas:cobrarPendiente') {
+    try {
+      const payload = data?.args?.[0] || {}
+      const facturaId = Number(payload.factura_id || 0)
+      const turnoId = Number(payload.turno_id || 0)
+      if (!facturaId || !turnoId) throw new Error('Factura o turno invalido')
+
+      const facturaResponse = await handleOnlineDbAction('db/getById', { tabla: 'facturas', id: facturaId })
+      const factura = facturaResponse?.data
+      if (!factura) throw new Error('La factura no existe')
+      if (!isCollectablePendingInvoice(factura)) throw new Error('El documento no es una factura de venta pendiente cobrable')
+
+      const turnoResponse = await handleOnlineDbAction('db/getById', { tabla: 'caja_turnos', id: turnoId })
+      const turno = turnoResponse?.data
+      if (!turno || String(turno.estado || '').toLowerCase() !== 'abierto') throw new Error('El turno de caja no esta abierto')
+      if (factura.almacen_uid && turno.almacen_uid && String(factura.almacen_uid) !== String(turno.almacen_uid)) throw new Error('La factura pertenece a otro almacen')
+
+      const metodo = String(payload.metodo_pago || '').toUpperCase()
+      if (!['EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'MIXTO'].includes(metodo)) throw new Error('Metodo de pago invalido')
+      const efectivo = Math.max(0, Number(payload.efectivo || 0))
+      const transferencia = Math.max(0, Number(payload.transferencia || 0))
+      const tarjeta = Math.max(0, Number(payload.tarjeta || 0))
+      if (Math.abs((efectivo + transferencia + tarjeta) - Number(factura.total || 0)) >= 0.01) throw new Error('La distribucion del pago no coincide con el total')
+
+      const montoBanco = transferencia + tarjeta
+      const bancoId = Number(payload.banco_id || 0)
+      let banco: any = null
+      if (montoBanco > 0) {
+        if (!bancoId) throw new Error('Selecciona el banco para la transferencia o tarjeta')
+        const bancoResponse = await handleOnlineDbAction('db/getById', { tabla: 'bancos', id: bancoId })
+        banco = bancoResponse?.data
+        if (!banco) throw new Error('El banco seleccionado no existe')
+      }
+
+      const ahora = new Date()
+      let otro: any = {}
+      try { otro = typeof factura.otro === 'string' ? JSON.parse(factura.otro || '{}') : factura.otro || {} } catch { otro = {} }
+      otro = { ...otro, cobro_caja: { metodo_pago: metodo, efectivo, transferencia, tarjeta, banco_id: bancoId || 0, banco_nombre: banco?.nombre || '', observacion: String(payload.observacion || '').trim().slice(0, 500), cajero: String(payload.cajero || ''), fecha: ahora.toISOString() } }
+      const cambios = {
+        estado_factura: 'PAGADA', turno_id: turnoId, metodo_pago: metodo, efectivo, transferencia, tarjeta,
+        fecha_estado: ahora.toISOString().split('T')[0], hora: ahora.toTimeString().slice(0, 5),
+        cajero: String(payload.cajero || ''), otro: JSON.stringify(otro), updated_at: ahora.toISOString(),
+      }
+      const actualizada = await handleOnlineDbAction('db/update', { tabla: 'facturas', id: facturaId, data: cambios })
+      if (!actualizada?.success || Number(actualizada?.changes || 0) !== 1) throw new Error(actualizada?.error || 'No se pudo actualizar la factura')
+
+      if (banco && montoBanco > 0) {
+        try {
+          await handleOnlineDbAction('db/update', { tabla: 'bancos', id: bancoId, data: { saldo: Number(banco.saldo || 0) + montoBanco, fecha_transaccion: ahora.toISOString(), updated_at: ahora.toISOString() } })
+        } catch (bankError) {
+          await handleOnlineDbAction('db/update', { tabla: 'facturas', id: facturaId, data: { estado_factura: factura.estado_factura || 'PENDIENTE', turno_id: Number(factura.turno_id || 0), metodo_pago: factura.metodo_pago || '', efectivo: Number(factura.efectivo || 0), transferencia: Number(factura.transferencia || 0), tarjeta: Number(factura.tarjeta || 0), fecha_estado: factura.fecha_estado || '', hora: factura.hora || '', cajero: factura.cajero || '', otro: factura.otro || '' } }).catch(() => {})
+          throw bankError
+        }
+      }
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'No se pudo cobrar la factura pendiente' }
+    }
+  }
+
   const cloud = getOnlineCloudCredentials()
   if (!cloud) return { success: false, error: 'TM Cloud no esta configurado. Configuralo para usar el sistema.' }
   try {
@@ -853,11 +936,11 @@ function initDatabase(): void {
     telefonos: { imagen: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     imei: { id_equi: 'INTEGER', telefono_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", fecha_venta: "TEXT DEFAULT ''", comprador: "TEXT DEFAULT ''", proveedor: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", precio_vendido: 'REAL DEFAULT 0', hora_venta: "TEXT DEFAULT ''", no_factura: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     serial: { id_equi: 'INTEGER', equipo_uid: "TEXT DEFAULT ''", equipo: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', color: "TEXT DEFAULT ''", capacidad: "TEXT DEFAULT ''", bateria: "TEXT DEFAULT ''", estado: "TEXT DEFAULT 'DISPONIBLE'", almacen_id: 'INTEGER DEFAULT 0' },
-    accesorios: { codigo_barra: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', cantidad: 'INTEGER DEFAULT 1', alerta: 'INTEGER DEFAULT 10', proveedor_id: 'INTEGER DEFAULT 0', imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    accesorios: { codigo_barra: "TEXT DEFAULT ''", costo: 'REAL DEFAULT 0', precio_venta: 'REAL DEFAULT 0', precio_min: 'REAL DEFAULT 0', precio_xmayor: 'REAL DEFAULT 0', cantidad: 'INTEGER DEFAULT 1', alerta: 'INTEGER DEFAULT 10', proveedor_id: 'INTEGER DEFAULT 0', imagen: "TEXT DEFAULT ''", no_compra: "TEXT DEFAULT ''", tipo_comision: "TEXT DEFAULT ''", valor_comision: 'REAL DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     piezas: { reservada: 'INTEGER DEFAULT 0', almacen_id: 'INTEGER DEFAULT 0' },
     tecnicos: { tipo_comision: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision: 'REAL DEFAULT 0' },
     facturas: { costo: 'REAL DEFAULT 0', ganancia: 'REAL DEFAULT 0', financiera: "TEXT DEFAULT ''", turno_id: 'INTEGER DEFAULT 0', canal_venta: "TEXT DEFAULT ''", ncf: "TEXT DEFAULT ''", tipo_comprobante: "TEXT DEFAULT ''", comprobante_id: 'INTEGER DEFAULT 0', referencia_origen: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
-    clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
+    clientes: { imagen: "TEXT DEFAULT ''", rnc: "TEXT DEFAULT ''", nota: "TEXT DEFAULT ''", tipo_cliente: "TEXT DEFAULT 'NORMAL'", almacen_id: 'INTEGER DEFAULT 0' },
     ordenes_taller: { imagen: "TEXT DEFAULT ''", pagos: "TEXT DEFAULT '[]'", beneficio_empresa: 'REAL DEFAULT 0', beneficio_tecnico: 'REAL DEFAULT 0', porcentaje_tecnico: 'REAL DEFAULT 0', tipo_comision_tecnico: "TEXT DEFAULT 'PORCENTAJE_MANO_OBRA'", valor_comision_tecnico: 'REAL DEFAULT 0', estado_pago_tecnico: "TEXT DEFAULT 'PENDIENTE'", fecha_pago_tecnico: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     cuentas_cobrar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
     cuentas_pagar: { pagos: "TEXT DEFAULT '[]'", fecha_vencimiento: "TEXT DEFAULT ''", almacen_id: 'INTEGER DEFAULT 0' },
@@ -977,13 +1060,13 @@ function initDatabase(): void {
   }
 
   function ensureClientesTable(): void {
-    const requiredColumns = ['cedula', 'telefono', 'whatsapp', 'email', 'direccion', 'apodo', 'precio_fijado', 'limite_credito', 'empresa', 'cargo', 'telefono_empresa', 'direccion_empresa', 'codigo', 'rnc', 'activo', 'nota', 'imagen', 'created_at', 'updated_at']
+    const requiredColumns = ['cedula', 'telefono', 'whatsapp', 'email', 'direccion', 'apodo', 'precio_fijado', 'limite_credito', 'empresa', 'cargo', 'telefono_empresa', 'direccion_empresa', 'codigo', 'rnc', 'activo', 'nota', 'imagen', 'tipo_cliente', 'created_at', 'updated_at']
     if (tableExists('clientes')) {
       const columns = tableColumns('clientes')
       if (!columns.includes('id')) {
         const copyColumns = ['nombre', ...requiredColumns].filter(column => columns.includes(column))
         db!.exec(`ALTER TABLE clientes RENAME TO clientes_old`)
-        db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+        db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',imagen TEXT DEFAULT '',tipo_cliente TEXT DEFAULT 'NORMAL',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
         if (copyColumns.length > 0) {
           const columnsSql = copyColumns.map(column => `"${column}"`).join(', ')
           db!.exec(`INSERT INTO clientes (${columnsSql}) SELECT ${columnsSql} FROM clientes_old`)
@@ -992,11 +1075,14 @@ function initDatabase(): void {
         return
       }
       for (const column of requiredColumns) {
-        if (!columns.includes(column)) db!.exec(`ALTER TABLE clientes ADD COLUMN "${column}" TEXT DEFAULT ''`)
+        if (!columns.includes(column)) {
+          const definition = column === 'tipo_cliente' ? "TEXT DEFAULT 'NORMAL'" : "TEXT DEFAULT ''"
+          db!.exec(`ALTER TABLE clientes ADD COLUMN "${column}" ${definition}`)
+        }
       }
       return
     }
-    db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',imagen TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
+    db!.exec(`CREATE TABLE clientes (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,cedula TEXT DEFAULT '',telefono TEXT DEFAULT '',whatsapp TEXT DEFAULT '',email TEXT DEFAULT '',direccion TEXT DEFAULT '',apodo TEXT DEFAULT '',precio_fijado TEXT DEFAULT '',limite_credito TEXT DEFAULT '',empresa TEXT DEFAULT '',cargo TEXT DEFAULT '',telefono_empresa TEXT DEFAULT '',direccion_empresa TEXT DEFAULT '',codigo TEXT DEFAULT '',rnc TEXT DEFAULT '',activo TEXT DEFAULT 'ACTIVO',nota TEXT DEFAULT '',imagen TEXT DEFAULT '',tipo_cliente TEXT DEFAULT 'NORMAL',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   }
 
   function ensureUsuariosTable(): void {
@@ -1237,12 +1323,14 @@ function initDatabase(): void {
 
   db.exec(`CREATE TABLE IF NOT EXISTS categorias (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,descripcion TEXT DEFAULT '',estado TEXT DEFAULT 'activo',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   db.exec(`CREATE TABLE IF NOT EXISTS marcas (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,descripcion TEXT DEFAULT '',estado TEXT DEFAULT 'activo',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
-  db.exec(`CREATE TABLE IF NOT EXISTS accesorios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,codigo_barra TEXT DEFAULT '',costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,cantidad INTEGER DEFAULT 1,alerta INTEGER DEFAULT 10,marca INTEGER,categoria INTEGER,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (marca) REFERENCES marcas(id),FOREIGN KEY (categoria) REFERENCES categorias(id))`)
+  db.exec(`CREATE TABLE IF NOT EXISTS accesorios (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,codigo_barra TEXT DEFAULT '',costo REAL DEFAULT 0,precio_venta REAL DEFAULT 0,precio_min REAL DEFAULT 0,precio_xmayor REAL DEFAULT 0,cantidad INTEGER DEFAULT 1,alerta INTEGER DEFAULT 10,marca INTEGER,categoria INTEGER,tipo_comision TEXT DEFAULT '',valor_comision REAL DEFAULT 0,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY (marca) REFERENCES marcas(id),FOREIGN KEY (categoria) REFERENCES categorias(id))`)
   db.exec(`CREATE TABLE IF NOT EXISTS perdidas (id INTEGER PRIMARY KEY AUTOINCREMENT,tipo TEXT NOT NULL,referencia_id INTEGER NOT NULL,nombre TEXT DEFAULT '',codigo TEXT DEFAULT '',cantidad INTEGER DEFAULT 1,costo REAL DEFAULT 0,motivo TEXT DEFAULT '',fecha TEXT DEFAULT '',almacen_id INTEGER DEFAULT 0,estado TEXT DEFAULT 'ACTIVA',detalle TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN codigo_barra TEXT DEFAULT ''`) } catch {}
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN proveedor_id INTEGER DEFAULT 0`) } catch {}
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
   try { db!.exec(`ALTER TABLE accesorios ADD COLUMN no_compra TEXT DEFAULT ''`) } catch {}
+  try { db!.exec(`ALTER TABLE accesorios ADD COLUMN tipo_comision TEXT DEFAULT ''`) } catch {}
+  try { db!.exec(`ALTER TABLE accesorios ADD COLUMN valor_comision REAL DEFAULT 0`) } catch {}
   db.exec(`CREATE TABLE IF NOT EXISTS telefonos (id INTEGER PRIMARY KEY AUTOINCREMENT,nombre TEXT NOT NULL,uid TEXT DEFAULT '',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`)
   try { db!.exec(`ALTER TABLE telefonos ADD COLUMN imagen TEXT DEFAULT ''`) } catch {}
   ensureProveedoresTable()
@@ -1632,6 +1720,23 @@ function cobrarVentaPendiente(payload: any): { success: boolean; error?: string 
 function setupIpcHandlers(): void {
   ipcMain.handle('online:runtime', (_event, action: string, data: Record<string, any> = {}) => callOnlineRuntime(action, data))
 
+  ipcMain.handle('whatsapp:open', async (_event, payload: { telefono?: unknown; mensaje?: unknown } = {}) => {
+    const telefono = String(payload.telefono || '').replace(/\D/g, '')
+    const mensaje = String(payload.mensaje || '')
+    if (!/^\d{7,15}$/.test(telefono)) return { success: false, error: 'Telefono de WhatsApp no valido' }
+    const query = `phone=${encodeURIComponent(telefono)}&text=${encodeURIComponent(mensaje)}`
+    try {
+      await shell.openExternal(`whatsapp://send?${query}`, { activate: true })
+      return { success: true, target: 'app' }
+    } catch {
+      try {
+        await shell.openExternal(`https://wa.me/${encodeURIComponent(telefono)}?text=${encodeURIComponent(mensaje)}`, { activate: true })
+        return { success: true, target: 'browser' }
+      } catch (error: any) {
+        return { success: false, error: error?.message || 'No se pudo abrir WhatsApp' }
+      }
+    }
+  })
   ipcMain.handle('empresa-local:ensureColumns', (_event, sample: Record<string, any> = {}) => {
     try {
       const existing = new Set((db!.prepare(`PRAGMA table_info("empresa")`).all() as any[]).map(column => String(column.name)))
@@ -2698,6 +2803,7 @@ function setupIpcHandlers(): void {
   const licenciaVisualizacionOtp = new Map<string, { codigo: string; licencia: string; email: string; expiresAt: number }>()
   const facturaEliminacionOtp = new Map<string, { codigo: string; facturaIds: number[]; email: string; expiresAt: number }>()
   const imeiEliminacionOtp = new Map<string, { codigo: string; imeiIds: number[]; email: string; expiresAt: number }>()
+  const telefonoEliminacionOtp = new Map<string, { codigo: string; telefonoIds: number[]; email: string; expiresAt: number }>()
 
   function getLicenciaAuthToken(): string {
     return getLicenciaWriteToken()
@@ -4390,6 +4496,74 @@ function setupIpcHandlers(): void {
     } catch (e: any) { return { success: false, error: e.message || 'Error validando codigo' } }
   })
 
+  ipcMain.handle('telefonos:solicitarOtpEliminar', async (_event, telefono: any = {}) => {
+    try {
+      const telefonoIds = (Array.isArray(telefono?.telefonoIds) ? telefono.telefonoIds : [telefono?.id])
+        .map((id: any) => Number(id || 0))
+        .filter((id: number) => id > 0)
+        .sort((a: number, b: number) => a - b)
+      if (telefonoIds.length === 0) return { success: false, error: 'Telefono invalido' }
+
+      const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
+      const key = `${mac}:${telefonoIds.join(',')}`
+      const otpStatus = getOtpLocalStatus()
+      telefonoEliminacionOtp.set(key, {
+        codigo: otpStatus.code,
+        telefonoIds,
+        email: otpStatus.sendEmail ? getOtpEmailConfig().email : 'OTP LOCAL',
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      })
+
+      let email = ''
+      if (otpStatus.sendEmail) {
+        const emailConfig = getOtpEmailConfig()
+        email = String(emailConfig.email || '').trim()
+        if (!email) {
+          telefonoEliminacionOtp.delete(key)
+          return { success: false, error: 'Activa o completa la configuracion de correo antes de enviar el OTP' }
+        }
+        const emailResult = await enviarOtpPorApi(email, otpStatus.code, {
+          ...telefono,
+          entidad: 'telefono',
+          entidadPlural: 'telefonos',
+          cantidad: telefonoIds.length,
+          no_factura: telefonoIds.length > 1 ? `${telefonoIds.length} telefonos` : (telefono?.nombre || `TELEFONO-${telefonoIds[0]}`),
+        })
+        if (!emailResult.success) {
+          telefonoEliminacionOtp.delete(key)
+          return { success: false, error: emailResult.error || 'No se pudo enviar el OTP al correo' }
+        }
+      }
+
+      return { success: true, data: { local: true, emailSent: otpStatus.sendEmail, email, networkUrl: otpStatus.networkUrl, mode: otpStatus.mode, expiresMinutes: 10 } }
+    } catch (e: any) { return { success: false, error: e.message || 'Error solicitando codigo' } }
+  })
+
+  ipcMain.handle('telefonos:confirmarOtpEliminar', async (_event, payload: { telefonoId?: number; telefonoIds?: number[]; codigo?: string } = {}) => {
+    try {
+      const telefonoIds = (Array.isArray(payload?.telefonoIds) ? payload.telefonoIds : [payload?.telefonoId])
+        .map((id: any) => Number(id || 0))
+        .filter((id: number) => id > 0)
+        .sort((a: number, b: number) => a - b)
+      const codigo = String(payload?.codigo || '').replace(/\D/g, '')
+      if (telefonoIds.length === 0) return { success: false, error: 'Telefono invalido' }
+      if (!/^\d{4}$/.test(codigo)) return { success: false, error: 'Introduce el codigo de 4 digitos' }
+
+      const mac = normalizarMac(obtenerMacAddress()) || 'LOCAL'
+      const key = `${mac}:${telefonoIds.join(',')}`
+      const registro = telefonoEliminacionOtp.get(key)
+      if (!registro) return { success: false, error: 'Solicita un codigo nuevo' }
+      if (Date.now() > registro.expiresAt) {
+        telefonoEliminacionOtp.delete(key)
+        return { success: false, error: 'El codigo vencio. Solicita uno nuevo' }
+      }
+      if (!validateLocalOtp(codigo)) return { success: false, error: 'Codigo OTP local incorrecto' }
+
+      telefonoEliminacionOtp.delete(key)
+      return { success: true }
+    } catch (e: any) { return { success: false, error: e.message || 'Error validando codigo' } }
+  })
+
   ipcMain.handle('imei:solicitarOtpEliminar', async (_event, imei: any = {}) => {
     try {
       const imeiIds = (Array.isArray(imei?.imeiIds) ? imei.imeiIds : [imei?.id])
@@ -6041,6 +6215,12 @@ function createWindow() {
     mainWindow?.focus()
     mainWindow?.webContents.focus()
   })
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'F12') return
+    event.preventDefault()
+    if (mainWindow?.webContents.isDevToolsOpened()) mainWindow.webContents.closeDevTools()
+    else mainWindow?.webContents.openDevTools({ mode: 'detach' })
+  })
   if (process.env.VITE_DEV_SERVER_URL) mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   else mainWindow.loadFile(join(__dirname, '../dist/index.html'))
 }
@@ -6057,8 +6237,6 @@ app.whenReady().then(async () => {
   await startLocalServer()
   createWindow()
   mainWindow?.webContents.closeDevTools()
-  // F12 is handled by the renderer and validated by the privileged IPC handler.
-  // Never toggle DevTools directly here because that bypasses the active user role.
 })
 
 app.on('window-all-closed', () => {

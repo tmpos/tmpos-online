@@ -246,24 +246,11 @@ watch([() => almacenStore.activeId, () => almacenStore.activeUid], ([id, uid], [
 const navMenu = ref<HTMLElement | null>(null)
 const showLabels = ref(true)
 
-onMounted(() => {
-  window.addEventListener('keydown', handleKeyDown)
-})
 
 onUnmounted(() => {
   window.removeEventListener('empresa:actualizada', refrescarEmpresa)
-  window.removeEventListener('keydown', handleKeyDown)
 })
 
-function handleKeyDown(e: KeyboardEvent) {
-  if (e.key === 'F12') {
-    e.preventDefault()
-    if ((auth.isAdmin || auth.isSoporte) && (window as any).electron?.invoke) {
-      const usuario = auth.user?.usuario || auth.user?.email || auth.user?.nombre || ''
-      ;(window as any).electron.invoke('open:devtools', usuario).catch(() => {})
-    }
-  }
-}
 
 function abrirBusquedaGlobal() {
   window.dispatchEvent(new CustomEvent('global-search:open'))

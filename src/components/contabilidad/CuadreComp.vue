@@ -14,13 +14,16 @@
 
     <template v-else>
       <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-4">
-        <div class="w-full sm:w-80">
-          <label class="block text-xs font-semibold text-surface-500 mb-1.5">Buscar por fecha</label>
-          <Calendar v-model="rangoFechas" selectionMode="range" dateFormat="dd/mm/yy" placeholder="Desde - Hasta" showIcon fluid :manualInput="false" />
+        <div class="flex flex-col sm:flex-row sm:items-end gap-2 w-full sm:w-auto">
+          <div class="w-full sm:w-80">
+            <label class="block text-xs font-semibold text-surface-500 mb-1.5">Buscar por fecha</label>
+            <Calendar v-model="rangoFechas" selectionMode="range" dateFormat="dd/mm/yy" placeholder="Desde - Hasta" showIcon fluid :manualInput="false" />
+          </div>
+          <Button label="Buscar" icon="pi pi-search" size="small" :disabled="!rangoFechas?.[0]" @click="buscarPorFecha" />
         </div>
         <div class="flex items-center gap-3 sm:pb-2">
-          <span class="text-sm text-surface-500">{{ cuadresFiltrados.length }} cuadre(s)</span>
-          <Button v-if="rangoFechas.length" label="Limpiar" icon="pi pi-filter-slash" severity="secondary" text size="small" @click="rangoFechas = []" />
+          <span class="text-sm text-surface-500">{{ cuadresFiltrados.length }} cuadre(s){{ consultaPorFecha ? ' en el rango' : ' recientes' }}</span>
+          <Button v-if="rangoFechas.length || consultaPorFecha" label="Limpiar" icon="pi pi-filter-slash" severity="secondary" text size="small" @click="limpiarFechas" />
         </div>
       </div>
 
@@ -133,13 +136,14 @@
           </div>
           <div class="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
             <p class="text-xs text-red-600">Gastos del turno</p>
-            <p class="text-lg font-bold text-red-700">{{ $formatMoney(resumenGastos) }}</p>
+            <p class="text-lg font-bold text-red-700">{{ $formatMoney(resumenGastos.total) }}</p>
+            <p class="text-xs text-red-500">{{ resumenGastos.cantidad }} gasto(s) | Efectivo: {{ $formatMoney(resumenGastos.efectivo) }} | Transf: {{ $formatMoney(resumenGastos.transferencia) }}</p>
           </div>
         </div>
         <div class="border-t border-surface-200 dark:border-surface-700 pt-3">
           <div class="flex justify-between text-base font-bold">
             <span>Saldo final estimado</span>
-            <span class="text-green-600">{{ $formatMoney(resumenVentas.total - resumenGastos + (turnoActivo.monto_inicial || 0)) }}</span>
+            <span class="text-green-600">{{ $formatMoney(resumenVentas.total - resumenGastos.total + (turnoActivo.monto_inicial || 0)) }}</span>
           </div>
         </div>
         <div>
@@ -169,6 +173,7 @@ import { useToast } from 'primevue/usetoast'
 import { useAlmacenStore } from '@/stores/almacen.store'
 import { useCloudRefresh } from '@/composables/useCloudRefresh'
 import { resolvePrintableImage } from '@/services/printImageService'
+import { emptyCashClosingExpenseSummary, summarizeCashClosingExpenses } from '@/domain/cashClosingExpenses'
 import Swal from 'sweetalert2'
 
 const toast = useToast()
@@ -183,31 +188,12 @@ const observacion = ref('')
 const turnoActivo = ref<any>(null)
 const resumenCargando = ref(false)
 const resumenVentas = ref({ total: 0, efectivo: 0, tarjeta: 0, transferencia: 0, abonos_cxc: 0, cantidad_abonos_cxc: 0, cobros_taller: 0, cantidad_cobros_taller: 0 })
-const resumenGastos = ref(0)
+const resumenGastos = ref(emptyCashClosingExpenseSummary())
 const accionandoId = ref<number | null>(null)
 const pdfGenerandoId = ref<number | null>(null)
 const rangoFechas = ref<Date[]>([])
-
-function fechaCuadre(cuadre: any): Date | null {
-  const valor = String(cuadre.created_at || cuadre.fecha || '').trim()
-  if (!valor) return null
-  const fecha = new Date(valor.includes('T') ? valor : valor.replace(' ', 'T'))
-  return Number.isNaN(fecha.getTime()) ? null : fecha
-}
-
-const cuadresFiltrados = computed(() => {
-  const desdeSeleccionado = rangoFechas.value?.[0]
-  if (!desdeSeleccionado) return cuadres.value
-  const hastaSeleccionado = rangoFechas.value?.[1] || desdeSeleccionado
-  const desde = new Date(desdeSeleccionado)
-  const hasta = new Date(hastaSeleccionado)
-  desde.setHours(0, 0, 0, 0)
-  hasta.setHours(23, 59, 59, 999)
-  return cuadres.value.filter((cuadre) => {
-    const fecha = fechaCuadre(cuadre)
-    return fecha ? fecha >= desde && fecha <= hasta : false
-  })
-})
+const consultaPorFecha = ref(false)
+const cuadresFiltrados = computed(() => cuadres.value)
 
 const resumenFiltrado = computed(() => cuadresFiltrados.value.reduce((total, cuadre) => {
   total.totalCobrado += Number(cuadre.total_ventas || 0)
@@ -222,19 +208,43 @@ function formatCurrency(n: number): string {
   return Number(n || 0).toLocaleString(getSystemLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-async function cargar() {
+function fechaConsulta(fecha: Date): string {
+  const year = fecha.getFullYear()
+  const month = String(fecha.getMonth() + 1).padStart(2, '0')
+  const day = String(fecha.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+async function cargar(fechas?: { desde: string; hasta: string }) {
   loading.value = true
   try {
-    const res = await window.db.getAll('cuadres')
+    const res = await window.db.getCuadres({
+      almacenUid: String(almacenStore.activeUid || ''),
+      limit: fechas ? undefined : 10,
+      desde: fechas?.desde,
+      hasta: fechas?.hasta,
+    })
     if (!res.success) throw new Error(res.error || 'No se pudieron cargar los cuadres')
-    const almacenUid = String(almacenStore.activeUid || '')
     cuadres.value = (res.data || [])
-      .filter((cuadre: any) => !almacenUid || !cuadre.almacen_uid || String(cuadre.almacen_uid) === almacenUid)
       .sort((a: any, b: any) => String(b.created_at || b.fecha || '').localeCompare(String(a.created_at || a.fecha || '')))
   } catch (e: any) {
     cuadres.value = []
     toast.add({ severity: 'error', summary: 'Error', detail: e?.message || 'No se pudieron cargar los cuadres', life: 4000 })
   } finally { loading.value = false }
+}
+
+async function buscarPorFecha() {
+  const desde = rangoFechas.value?.[0]
+  if (!desde) return
+  const hasta = rangoFechas.value?.[1] || desde
+  consultaPorFecha.value = true
+  await cargar({ desde: fechaConsulta(desde), hasta: fechaConsulta(hasta) })
+}
+
+async function limpiarFechas() {
+  rangoFechas.value = []
+  consultaPorFecha.value = false
+  await cargar()
 }
 
 useCloudRefresh(['cuadres'], cargar)
@@ -243,7 +253,7 @@ async function abrirNuevoCuadre() {
   error.value = ''
   observacion.value = ''
   resumenVentas.value = { total: 0, efectivo: 0, tarjeta: 0, transferencia: 0, abonos_cxc: 0, cantidad_abonos_cxc: 0, cobros_taller: 0, cantidad_cobros_taller: 0 }
-  resumenGastos.value = 0
+  resumenGastos.value = emptyCashClosingExpenseSummary()
   resumenCargando.value = true
   dialogVisible.value = true
   try {
@@ -321,9 +331,16 @@ async function abrirNuevoCuadre() {
       }
     }
     resumenVentas.value = { total, efectivo, tarjeta, transferencia, abonos_cxc: abonosCxc, cantidad_abonos_cxc: cantidadAbonosCxc, cobros_taller: cobrosTaller, cantidad_cobros_taller: cantidadCobrosTaller }
-    resumenGastos.value = (gastosRes.success ? gastosRes.data || [] : [])
-      .filter((gasto: any) => Number(gasto.turno_id || 0) === turnoId)
-      .reduce((sum: number, gasto: any) => sum + Number(gasto.cantidad || 0), 0)
+    if (!gastosRes.success) throw new Error(gastosRes.error || 'No se pudieron cargar los gastos del turno')
+    const almacenId = Number(almacenStore.activeId || 0)
+    const gastosTurno = (gastosRes.data || []).filter((gasto: any) => {
+      if (Number(gasto.turno_id || 0) !== turnoId) return false
+      const gastoAlmacenUid = String(gasto.almacen_uid || '')
+      if (almacenUid && gastoAlmacenUid) return gastoAlmacenUid === almacenUid
+      const gastoAlmacenId = Number(gasto.almacen_id || 0)
+      return !almacenId || !gastoAlmacenId || gastoAlmacenId === almacenId
+    })
+    resumenGastos.value = summarizeCashClosingExpenses(gastosTurno)
   } catch (e: any) {
     turnoActivo.value = null
     error.value = e?.message || 'No se pudo calcular el cuadre'
@@ -347,8 +364,8 @@ async function realizarCuadre() {
       transferencia: resumenVentas.value.transferencia,
       abonos_cxc: resumenVentas.value.abonos_cxc,
       cantidad_abonos_cxc: resumenVentas.value.cantidad_abonos_cxc,
-      total_gastos: resumenGastos.value,
-      saldo_final: resumenVentas.value.total - resumenGastos.value + (turnoActivo.value.monto_inicial || 0),
+      total_gastos: resumenGastos.value.total,
+      saldo_final: resumenVentas.value.total - resumenGastos.value.total + (turnoActivo.value.monto_inicial || 0),
       observacion: observacion.value,
       almacen_id: almacenStore.activeId || 0,
       almacen_uid: almacenStore.activeUid || '',
@@ -597,6 +614,8 @@ watch(
   () => [almacenStore.activeUid, almacenStore.activeId],
   () => {
     turnoActivo.value = null
+    consultaPorFecha.value = false
+    rangoFechas.value = []
     cargar()
   },
 )

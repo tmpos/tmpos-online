@@ -5,6 +5,13 @@ export interface TMCloudConfig {
 }
 
 let currentConfig: TMCloudConfig | null = null
+const SYSTEM_SESSION_KEY = '__tmpos_system_session__'
+
+function getSystemProjectConfig(): TMCloudConfig | null {
+  const url = String((window as any).__systemProjectApiBase || '').trim().replace(/\/+$/, '')
+  if (!url) return null
+  return { url, key: SYSTEM_SESSION_KEY, serviceKey: SYSTEM_SESSION_KEY }
+}
 
 function normalizeUrl(url: string): string {
   const value = url.trim().replace(/\/+$/, '')
@@ -14,7 +21,9 @@ function normalizeUrl(url: string): string {
 
 function authHeaders(key: string, json = false): Record<string, string> {
   return {
-    Authorization: `Bearer ${key}`,
+    ...(key === SYSTEM_SESSION_KEY
+      ? { 'X-CSRF-Token': String((window as any).__systemProjectCsrf || '') }
+      : { Authorization: `Bearer ${key}` }),
     ...(json ? { 'Content-Type': 'application/json' } : {}),
   }
 }
@@ -25,6 +34,8 @@ async function responseError(res: Response): Promise<string> {
 }
 
 export async function loadConfig(): Promise<TMCloudConfig> {
+  const systemConfig = getSystemProjectConfig()
+  if (systemConfig) return systemConfig
   try {
     if ((window as any).electron?.invoke) {
       const res = await (window as any).electron.invoke('tmcloud:getConfig')
@@ -313,6 +324,8 @@ export function cleanRecord(data: any, updating = false): any {
 }
 
 function getStorageUrl(): string | null {
+  const systemStorageUrl = String((window as any).__systemProjectStorageBase || '').trim().replace(/\/+$/, '')
+  if (systemStorageUrl) return systemStorageUrl
   if (!currentConfig?.url) return null
   const apiUrl = currentConfig.url.replace(/\/+$/, '')
   return apiUrl + '/storage'
@@ -396,7 +409,8 @@ export async function uploadImage(file: File, directory: string): Promise<string
     formData.append('directory', directory)
     const res = await fetch(`${storageUrl}/upload`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${auth.key}` },
+      headers: authHeaders(auth.key),
+      credentials: auth.key === SYSTEM_SESSION_KEY ? 'same-origin' : undefined,
       body: formData,
     })
     if (res.status === 429 && attempt < 3) {
@@ -463,7 +477,8 @@ export async function deleteImage(uid: string): Promise<boolean> {
   if (/^(data:|blob:)/i.test(uid)) return false
   const res = await fetch(`${storageUrl}/${uid}`, {
     method: 'DELETE',
-    headers: { Authorization: `Bearer ${key}` },
+    headers: authHeaders(key.key),
+    credentials: key.key === SYSTEM_SESSION_KEY ? 'same-origin' : undefined,
   })
   return res.ok
 }

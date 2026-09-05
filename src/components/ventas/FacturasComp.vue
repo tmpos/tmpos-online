@@ -25,6 +25,7 @@ import { reintegrarInventarioFactura } from '@/composables/useDevoluciones'
 import { useAlmacenFilter } from '@/composables/useAlmacenFilter'
 import { useAuthStore } from '@/stores/auth.store'
 import { matchesSearch } from '@/composables/useSearch'
+import { alanubeSaleEndpoint, isSupportedPosSaleEcf, saleEcfRequiresBuyer } from '@/domain/electronicInvoiceTypes'
 
 import { envioElectron } from '@/funciones/funciones.js'
 
@@ -58,11 +59,22 @@ const almacenDestino = ref<any>(null)
 const almacenesDestino = ref<any[]>([])
 const moviendoAlmacen = ref(false)
 const busqueda = ref('')
-const rangoActivo = ref<string>('todo')
+const rangoActivo = ref<string>('mes')
 const rangoPersonalizado = ref<Date[]>([])
 const comprobanteFiltro = ref('')
 const reenviandoAlanube = ref(false)
-
+const compartiendoWhatsapp = ref(false)
+const whatsappPhoneDialog = ref(false)
+const whatsappPhoneInput = ref('')
+const whatsappPendingInvoice = ref<any>(null)
+const whatsappPhoneSaving = ref(false)
+const whatsappPaso = ref(0)
+const whatsappDetalle = ref('Preparando los datos de la factura...')
+const etapasCompartirWhatsapp = [
+  { titulo: 'Generando PDF', detalle: 'Creando el documento profesional de la factura.' },
+  { titulo: 'Copiando archivo', detalle: 'Colocando el PDF en el portapapeles de Windows.' },
+  { titulo: 'Abriendo WhatsApp', detalle: 'Iniciando WhatsApp Desktop con el mensaje preparado.' },
+]
 watch(() => route.query.factura, (numero) => {
   const facturaSolicitada = String(numero || '').trim()
   if (!facturaSolicitada) return
@@ -168,16 +180,71 @@ async function registrarAuditoria(accion: string, factura: any, detalle: any = {
 }
 
 async function compartirWhatsAppFactura(factura: any) {
-  const telefono = factura.telefono_cliente || ''
+  if (!factura || compartiendoWhatsapp.value) return
+  const telefonoLocal = String(factura.whatsapp_cliente || factura.whatsapp || factura.telefono_cliente || '').replace(/\D/g, '')
+  const telefono = telefonoLocal.length === 10 ? `1${telefonoLocal}` : telefonoLocal
   if (!telefono) {
-    toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'El cliente no tiene telefono registrado', life: 3000 })
+    whatsappPendingInvoice.value = factura
+    whatsappPhoneInput.value = ''
+    whatsappPhoneDialog.value = true
     return
   }
-  const mensaje = encodeURIComponent(
-    `Factura ${factura.no_factura}\nTotal: RD$${Number(factura.total).toFixed(2)}\nCliente: ${factura.nombre_cliente}\nFecha: ${factura.fecha_emision}`
-  )
-  window.open(`https://wa.me/${telefono.replace(/[^0-9]/g, '')}?text=${mensaje}`, '_blank')
-  await registrarAuditoria('compartir_whatsapp', factura, { telefono })
+
+  compartiendoWhatsapp.value = true
+  whatsappPaso.value = 0
+  whatsappDetalle.value = etapasCompartirWhatsapp[0].detalle
+  try {
+    const html = await facturaPdfRef.value?.generateFacturaHtml({ factura })
+    if (!html) throw new Error('No se pudo preparar el contenido de la factura')
+
+    const nombre = `Factura_${factura.no_factura || 'sin_numero'}.pdf`
+    const pdf = await window.electron.invoke('pdf:generateToFile', html, nombre) as any
+    if (!pdf?.success || !pdf.filePath) throw new Error(pdf?.error || 'No se pudo crear el PDF')
+
+    whatsappPaso.value = 1
+    whatsappDetalle.value = etapasCompartirWhatsapp[1].detalle
+    const copiado = await window.electron.invoke('clipboard:copyFile', pdf.filePath) as any
+    if (!copiado?.success) throw new Error(copiado?.error || 'No se pudo copiar el PDF al portapapeles')
+
+    whatsappPaso.value = 2
+    whatsappDetalle.value = etapasCompartirWhatsapp[2].detalle
+    const mensaje = `Factura ${factura.no_factura}\nTotal: RD$${Number(factura.total).toFixed(2)}\nCliente: ${factura.nombre_cliente}\nFecha: ${factura.fecha_emision}`
+    const resultado = await window.electron.invoke('whatsapp:open', { telefono, mensaje }) as any
+    if (resultado?.success === false) throw new Error(resultado.error || 'No se pudo abrir WhatsApp')
+
+    toast.add({ severity: 'success', summary: 'Factura preparada', detail: 'El PDF esta copiado. Pegalo en WhatsApp con Ctrl+V para enviarlo.', life: 5000 })
+    await registrarAuditoria('compartir_whatsapp', factura, { telefono, pdf: true })
+  } catch (error: any) {
+    await registrarAuditoria('compartir_whatsapp', factura, { telefono, error: error?.message || '' }, 'ERROR')
+    toast.add({ severity: 'error', summary: 'No se pudo compartir', detail: error?.message || 'Ocurrio un error preparando la factura', life: 4500 })
+  } finally {
+    compartiendoWhatsapp.value = false
+  }
+}
+
+async function confirmarWhatsappFactura() {
+  const telefonoLocal = String(whatsappPhoneInput.value || '').replace(/\D/g, '')
+  if (telefonoLocal.length < 10 || telefonoLocal.length > 15) {
+    toast.add({ severity: 'warn', summary: 'WhatsApp', detail: 'Ingresa un numero valido de 10 a 15 digitos', life: 3000 })
+    return
+  }
+  const factura = whatsappPendingInvoice.value
+  if (!factura?.id || whatsappPhoneSaving.value) return
+
+  whatsappPhoneSaving.value = true
+  try {
+    const result = await window.db.update('facturas', factura.id, { telefono_cliente: telefonoLocal })
+    if (!result?.success) throw new Error(result?.error || 'No se pudo guardar el telefono')
+    factura.telefono_cliente = telefonoLocal
+    whatsappPhoneDialog.value = false
+    whatsappPendingInvoice.value = null
+    whatsappPhoneInput.value = ''
+    await compartirWhatsAppFactura(factura)
+  } catch (error: any) {
+    toast.add({ severity: 'error', summary: 'WhatsApp', detail: error?.message || 'No se pudo guardar el telefono', life: 4000 })
+  } finally {
+    whatsappPhoneSaving.value = false
+  }
 }
 
 function getRango(key: string): { inicio: string; fin: string } | null {
@@ -311,7 +378,13 @@ const facturasFiltradas = computed(() => {
 
   if (busqueda.value) items = items.filter(f => matchesSearch(f, busqueda.value, ['no_factura', 'nombre_cliente', 'telefono_cliente', 'estado_factura', 'total', 'comprobante', 'ncf', 'cod_cliente']))
 
-  return items
+  return [...items].sort((a: any, b: any) => {
+    const fecha = String(b.fecha_emision || '').localeCompare(String(a.fecha_emision || ''))
+    if (fecha !== 0) return fecha
+    const hora = String(b.hora || '').localeCompare(String(a.hora || ''))
+    if (hora !== 0) return hora
+    return Number(b.id || 0) - Number(a.id || 0)
+  })
 })
 
 const resumenFacturas = computed(() => {
@@ -694,8 +767,8 @@ async function reintentarAlanube(factura: any) {
 
   const compTipo = obtenerTipoEcf(factura)
   const ncf = obtenerNcfFactura(factura)
-  if (!['E31', 'E32'].includes(compTipo) || !ncf) {
-    toast.add({ severity: 'warn', summary: 'Alanube', detail: 'Solo se puede reenviar facturas electronicas E31 o E32 con NCF', life: 3500 })
+  if (!isSupportedPosSaleEcf(compTipo) || !ncf) {
+    toast.add({ severity: 'warn', summary: 'Alanube', detail: 'Solo se pueden reenviar facturas E31, E32 o gubernamentales E45 con NCF', life: 3500 })
     return
   }
 
@@ -714,7 +787,21 @@ async function reintentarAlanube(factura: any) {
     if (!tokenAlanube || !alanubeIdCompania) throw new Error('Configura token e id compania de Alanube')
 
     const { company, empresa } = await cargarEmpresaAlanube()
-    const endpoint = compTipo === 'E31' ? 'fiscal-invoices' : 'invoices'
+    const endpoint = alanubeSaleEndpoint(compTipo)
+    if (!endpoint) throw new Error(`El comprobante ${compTipo} no esta soportado para reenvio`)
+    let facturaConCliente = factura
+    const clienteId = Number(factura.cod_cliente || 0)
+    if (saleEcfRequiresBuyer(compTipo) && clienteId > 0) {
+      const clienteRes = await window.db.getById('clientes', clienteId)
+      if (clienteRes?.success && clienteRes.data) {
+        facturaConCliente = {
+          ...factura,
+          rnc_cliente: clienteRes.data.rnc || clienteRes.data.cedula || '',
+          direccion_cliente: clienteRes.data.direccion || '',
+          email_cliente: clienteRes.data.email || '',
+        }
+      }
+    }
     const payload: any = {
       company: { id: alanubeIdCompania },
       idDoc: {
@@ -730,7 +817,12 @@ async function reintentarAlanube(factura: any) {
       itemDetails: buildAlanubeItemDetails(factura),
       config: { sendToDgii: true },
     }
-    if (compTipo === 'E31' || Number(factura.total || 0) >= 250000) payload.buyer = buildAlanubeBuyer(factura)
+    if (saleEcfRequiresBuyer(compTipo)) {
+      const buyer = buildAlanubeBuyer(facturaConCliente)
+      if (!/^\d{9}$/.test(String(buyer.rnc || ''))) throw new Error(`${compTipo} requiere un cliente con RNC valido de 9 digitos`)
+      payload.buyer = buyer
+    }
+    else if (Number(factura.total || 0) >= 250000) payload.buyer = buildAlanubeBuyer(facturaConCliente)
 
     const res = await fetch(`${baseUrl}/${endpoint}`, {
       method: 'POST',
@@ -1192,6 +1284,8 @@ onMounted(async () => {
         :rows="10"
         :rowsPerPageOptions="[10, 25, 50]"
         dataKey="id"
+        sortField="fecha_emision"
+        :sortOrder="-1"
         responsiveLayout="scroll"
       >
         <Column selectionMode="multiple" headerStyle="width: 3rem" />
@@ -1408,8 +1502,79 @@ onMounted(async () => {
         </div>
       </div>
     </Dialog>
-    <TicketFacturaPrint ref="ticketPrintRef" />
-    <FacturaPdfPrint ref="facturaPdfRef" />
+    <Dialog
+      v-model:visible="whatsappPhoneDialog"
+      header="WhatsApp del cliente"
+      modal
+      :draggable="false"
+      :style="{ width: 'min(26rem, calc(100vw - 2rem))' }"
+      @after-hide="whatsappPendingInvoice = null; whatsappPhoneInput = ''"
+    >
+      <div class="space-y-3">
+        <p class="text-sm text-surface-500">Esta factura no tiene un numero de WhatsApp. Ingresalo para guardarlo y continuar con el envio.</p>
+        <div class="flex flex-col gap-1">
+          <label class="text-sm font-semibold">Numero de WhatsApp</label>
+          <InputText v-model="whatsappPhoneInput" inputmode="tel" autocomplete="tel" placeholder="8095551234" fluid @keydown.enter="confirmarWhatsappFactura" />
+          <small class="text-surface-500">Para numeros dominicanos puedes escribir los 10 digitos; el prefijo 1 se agrega automaticamente.</small>
+        </div>
+      </div>
+      <template #footer>
+        <Button label="Cancelar" severity="secondary" text :disabled="whatsappPhoneSaving" @click="whatsappPhoneDialog = false" />
+        <Button label="Guardar y enviar" icon="pi pi-whatsapp" severity="success" :loading="whatsappPhoneSaving" @click="confirmarWhatsappFactura" />
+      </template>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="compartiendoWhatsapp"
+      modal
+      :closable="false"
+      :closeOnEscape="false"
+      :draggable="false"
+      :showHeader="false"
+      :style="{ width: 'min(30rem, 92vw)' }"
+    >
+      <div class="px-2 py-5 sm:px-5">
+        <div class="flex flex-col items-center text-center">
+          <div class="relative mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-emerald-50 dark:bg-emerald-950/40">
+            <i class="pi pi-whatsapp text-4xl text-emerald-500"></i>
+            <span class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full border-4 border-surface-0 bg-primary text-primary-contrast dark:border-surface-800">
+              <i class="pi pi-spin pi-spinner text-sm"></i>
+            </span>
+          </div>
+          <span class="mb-2 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">Compartiendo factura</span>
+          <h3 class="text-xl font-bold text-surface-900 dark:text-surface-0">{{ etapasCompartirWhatsapp[whatsappPaso].titulo }}</h3>
+          <p class="mt-2 min-h-10 text-sm leading-5 text-surface-500">{{ whatsappDetalle }}</p>
+        </div>
+
+        <div class="my-6 h-2 overflow-hidden rounded-full bg-surface-100 dark:bg-surface-700">
+          <div class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600 transition-all duration-500" :style="{ width: `${((whatsappPaso + 1) / etapasCompartirWhatsapp.length) * 100}%` }"></div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <div v-for="(etapa, index) in etapasCompartirWhatsapp" :key="etapa.titulo" class="flex flex-col items-center gap-2 text-center">
+            <span
+              class="flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold transition-colors"
+              :class="index < whatsappPaso
+                ? 'border-emerald-500 bg-emerald-500 text-white'
+                : index === whatsappPaso
+                  ? 'border-primary bg-primary text-primary-contrast'
+                  : 'border-surface-300 text-surface-400 dark:border-surface-600'"
+            >
+              <i v-if="index < whatsappPaso" class="pi pi-check text-xs"></i>
+              <span v-else>{{ index + 1 }}</span>
+            </span>
+            <span class="text-[11px] font-medium" :class="index <= whatsappPaso ? 'text-surface-700 dark:text-surface-200' : 'text-surface-400'">{{ etapa.titulo }}</span>
+          </div>
+        </div>
+
+        <div class="mt-6 flex items-center justify-center gap-2 rounded-lg bg-surface-50 px-3 py-2 text-xs text-surface-500 dark:bg-surface-700/40">
+          <i class="pi pi-info-circle"></i>
+          No cierres la aplicacion mientras se prepara el archivo.
+        </div>
+      </div>
+    </Dialog>
+
+    <TicketFacturaPrint ref="ticketPrintRef" />    <FacturaPdfPrint ref="facturaPdfRef" />
     <Menu ref="actionMenu" :model="actionMenuItems" popup />
   </div>
 </template>

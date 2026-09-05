@@ -31,7 +31,6 @@ export function useAtajosTeclado(acciones: AccionMap) {
     else if (key === 'f9') { e.preventDefault(); acciones['f9']?.() }
     else if (key === 'f10') { e.preventDefault(); acciones['f10']?.() }
     else if (key === 'f11') { e.preventDefault(); acciones['f11']?.() }
-    else if (key === 'f12') { e.preventDefault(); acciones['f12']?.() }
     else if (key === 'escape') { acciones['escape']?.() }
     else if (key === 'enter' && !e.ctrlKey && !e.metaKey) { acciones['enter']?.() }
   }
@@ -51,7 +50,6 @@ export function useAtajosTeclado(acciones: AccionMap) {
       { tecla: 'F9', desc: 'Limpiar carrito' },
       { tecla: 'F10', desc: 'Express (venta rápida)' },
       { tecla: 'F11', desc: 'Nota' },
-      { tecla: 'F12', desc: 'Ayuda / Atajos' },
       { tecla: 'Ctrl+K', desc: 'Búsqueda global' },
       { tecla: 'Ctrl+N', desc: 'Nuevo producto personalizado' },
       { tecla: 'Ctrl+L', desc: 'Limpiar carrito' },

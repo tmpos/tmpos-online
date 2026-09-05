@@ -44,6 +44,12 @@ const loading = ref(false)
 const viewMode = ref<'table' | 'cards'>('cards')
 const dialogVisible = ref(false)
 const deleteDialogVisible = ref(false)
+const deleteOtpEnviado = ref(false)
+const deleteOtpLoading = ref(false)
+const deleteOtpConfirmando = ref(false)
+const deleteOtp = ref('')
+const deleteOtpEmail = ref('')
+const deleteOtpError = ref('')
 const detalleDialogVisible = ref(false)
 const imeiDialogVisible = ref(false)
 const imeiAccionesVisible = ref(false)
@@ -342,12 +348,65 @@ function abrirEditar(tel?: any) {
 
 function confirmarBorrar(tel?: any) {
   if (tel) selectedTelefono.value = tel
+  if (!selectedTelefono.value?.id) return
+  deleteOtpEnviado.value = false
+  deleteOtpLoading.value = false
+  deleteOtpConfirmando.value = false
+  deleteOtp.value = ''
+  deleteOtpEmail.value = ''
+  deleteOtpError.value = ''
   deleteDialogVisible.value = true
 }
 
-async function borrarTelefono() {
+async function solicitarOtpBorrarTelefono() {
+  const telefono = selectedTelefono.value
+  if (!telefono?.id || deleteOtpLoading.value) return
+  deleteOtpError.value = ''
+  deleteOtp.value = ''
+  deleteOtpLoading.value = true
   try {
-    const res = await window.db.delete('telefonos', selectedTelefono.value.id)
+    const res = await window.electron.invoke('telefonos:solicitarOtpEliminar', {
+      id: telefono.id,
+      telefonoIds: [telefono.id],
+      nombre: telefono.nombre || '',
+      cantidad: 1,
+      entidad: 'telefono',
+      entidadPlural: 'telefonos',
+    }) as any
+    if (!res?.success) throw new Error(res?.error || 'No se pudo generar el codigo')
+    deleteOtpEmail.value = res.data?.networkUrl || ''
+    deleteOtpEnviado.value = true
+    toast.add({ severity: 'success', summary: 'Codigo generado', detail: 'Consulta el codigo en el Centro OTP', life: 3000 })
+  } catch (error: any) {
+    deleteOtpError.value = error?.message || 'No se pudo generar el codigo'
+  } finally {
+    deleteOtpLoading.value = false
+  }
+}
+
+async function borrarTelefono() {
+  const telefono = selectedTelefono.value
+  if (!telefono?.id || deleteOtpConfirmando.value) return
+  deleteOtpError.value = ''
+  const codigo = String(deleteOtp.value || '').replace(/\D/g, '')
+  if (!/^\d{4}$/.test(codigo)) {
+    deleteOtpError.value = 'Introduce el codigo de 4 digitos'
+    return
+  }
+
+  deleteOtpConfirmando.value = true
+  try {
+    const otpRes = await window.electron.invoke('telefonos:confirmarOtpEliminar', {
+      telefonoId: telefono.id,
+      telefonoIds: [telefono.id],
+      codigo,
+    }) as any
+    if (!otpRes?.success) {
+      deleteOtpError.value = otpRes?.error || 'Codigo no valido'
+      return
+    }
+
+    const res = await window.db.delete('telefonos', telefono.id)
     if (!res.success) {
       toast.add({ severity: 'error', summary: 'Error', detail: res.error || 'Error al eliminar', life: 4000 })
       return
@@ -357,6 +416,8 @@ async function borrarTelefono() {
     toast.add({ severity: 'success', summary: 'Eliminado', detail: 'Telefono eliminado', life: 2000 })
   } catch (e: any) {
     toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error al eliminar', life: 4000 })
+  } finally {
+    deleteOtpConfirmando.value = false
   }
 }
 
@@ -1742,13 +1803,21 @@ useCloudRefresh(['telefonos', 'imei'], cargarTelefonos)
       modal
       :style="{ width: '24rem' }"
     >
-      <div class="flex items-center gap-3">
-        <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
-        <span>Seguro que deseas eliminar <strong>{{ selectedTelefono?.nombre }}</strong>?</span>
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <i class="pi pi-exclamation-triangle text-3xl text-red-500"></i>
+          <span>Seguro que deseas eliminar <strong>{{ selectedTelefono?.nombre }}</strong>?</span>
+        </div>
+        <div v-if="deleteOtpEnviado" class="flex flex-col items-center gap-3 rounded-lg border border-surface-200 dark:border-surface-700 p-3">
+          <p class="text-xs text-surface-500 text-center">Consulta el codigo de 4 digitos en el Centro OTP: {{ deleteOtpEmail || 'Configuracion > OTP Local' }}.</p>
+          <InputOtp v-model="deleteOtp" :length="4" integerOnly mask />
+        </div>
+        <p v-if="deleteOtpError" class="text-red-500 text-xs text-center">{{ deleteOtpError }}</p>
       </div>
       <template #footer>
-        <Button label="Cancelar" severity="secondary" text @click="deleteDialogVisible = false" />
-        <Button label="Eliminar" icon="pi pi-trash" severity="danger" @click="borrarTelefono" />
+        <Button label="Cancelar" severity="secondary" text :disabled="deleteOtpConfirmando" @click="deleteDialogVisible = false" />
+        <Button v-if="!deleteOtpEnviado" label="Generar OTP" icon="pi pi-key" severity="danger" :loading="deleteOtpLoading" @click="solicitarOtpBorrarTelefono" />
+        <Button v-else label="Eliminar" icon="pi pi-trash" severity="danger" :loading="deleteOtpConfirmando" @click="borrarTelefono" />
       </template>
     </Dialog>
 

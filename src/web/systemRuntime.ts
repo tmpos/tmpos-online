@@ -108,6 +108,8 @@ export async function initSystemRuntime(): Promise<void> {
   const session = await response.json()
   if (!response.ok || !session?.data?.csrf) throw new Error(session?.error || 'No se pudo abrir la empresa.')
   csrf = session.data.csrf
+  ;(window as any).__systemProjectCsrf = csrf
+  ;(window as any).__systemProjectStorageBase = `${projectBase}/storage`
 
   const currentProject = String(session.data.project.uid || '')
   ;(window as any).__systemProjectApiBase = `${location.origin}/api/${encodeURIComponent(currentProject)}`
@@ -123,6 +125,7 @@ export async function initSystemRuntime(): Promise<void> {
   const actor = () => localStorage.getItem('mr_user_usuario') || ''
   const db: any = {
     getAll: (tabla: string) => runtime('db/getAll', { tabla }),
+    getCuadres: (options: Record<string, any> = {}) => runtime('cuadres/listar', options),
     getWhere: (tabla: string, where: string, params: any[] = []) => runtime('db/getWhere', { tabla, where, params }),
     getModified: (tabla: string, desde: string) => runtime('db/getModified', { tabla, desde }),
     getById: (tabla: string, id: number) => runtime('db/getById', { tabla, id }),

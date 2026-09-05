@@ -278,11 +278,17 @@ async function guardar() {
 
     const turnosRes = await window.db.getAll('caja_turnos')
     const turnoAbierto = turnosRes.success
-      ? (turnosRes.data || []).find((turno: any) => turno.estado === 'abierto' && (
-          almacenStore.activeUid && turno.almacen_uid
-            ? String(turno.almacen_uid) === almacenStore.activeUid
-            : !Number(turno.almacen_id) || Number(turno.almacen_id) === almacenStore.activeId
-        ))
+      ? (turnosRes.data || [])
+          .filter((turno: any) => String(turno.estado || '').toLowerCase() === 'abierto')
+          .filter((turno: any) => {
+            const almacenUid = String(almacenStore.activeUid || '')
+            const turnoAlmacenUid = String(turno.almacen_uid || '')
+            if (almacenUid && turnoAlmacenUid) return turnoAlmacenUid === almacenUid
+            const almacenId = Number(almacenStore.activeId || 0)
+            const turnoAlmacenId = Number(turno.almacen_id || 0)
+            return !almacenId || !turnoAlmacenId || turnoAlmacenId === almacenId
+          })
+          .sort((a: any, b: any) => Number(b.id || 0) - Number(a.id || 0))[0]
       : null
 
     const banco = bancos.value.find((item: any) => Number(item.id) === Number(form.value.banco_id || 0))

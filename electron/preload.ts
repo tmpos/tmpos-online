@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 const GLOBAL_TABLES = new Set(['usuarios', 'bancos', 'banco_transacciones'])
 const ONLINE_ONLY_LOCAL_TABLES = new Set([
-  'usuarios',
   'empresa',
   'tmcloud_config',
   'licencia',
@@ -14,10 +13,13 @@ const ONLINE_ONLY_LOCAL_CHANNELS = new Set([
   'generate:pdf',
   'getPrinters',
   'scan:bluetooth',
+  'whatsapp:open',
   // El OTP de eliminacion vive en memoria en el proceso principal y su envio
   // usa /otp/send. No es una accion de tabla ni debe pasar por /runtime.
   'facturas:solicitarOtpEliminar',
   'facturas:confirmarOtpEliminar',
+  'telefonos:solicitarOtpEliminar',
+  'telefonos:confirmarOtpEliminar',
 ])
 const LOCAL_SCHEMA_ACTIONS = new Set([
   'tableExists', 'getTableColumns', 'crearTabla', 'addColumnToTable',
@@ -106,6 +108,7 @@ function withAlmacen(data: Record<string, unknown>) {
 contextBridge.exposeInMainWorld('db', {
   getPath: () => ipcRenderer.invoke('db:getPath'),
   getAll: (tabla: string) => isOnlineLocalTable(tabla) ? ipcRenderer.invoke('db:getAll', tabla) : ipcRenderer.invoke('online:runtime', 'db/getAll', { tabla }),
+  getCuadres: (options: Record<string, unknown> = {}) => ipcRenderer.invoke('online:runtime', 'cuadres/listar', options),
   getWhere: (tabla: string, where: string, params: unknown[] = []) => isOnlineLocalTable(tabla) ? ipcRenderer.invoke('db:getWhere', tabla, where, params) : ipcRenderer.invoke('online:runtime', 'db/getWhere', { tabla, where, params }),
   getModified: (tabla: string, desde: string) => isOnlineLocalTable(tabla) ? ipcRenderer.invoke('db:getModified', tabla, desde) : ipcRenderer.invoke('online:runtime', 'db/getModified', { tabla, desde }),
   getById: (tabla: string, id: number) => isOnlineLocalTable(tabla) ? ipcRenderer.invoke('db:getById', tabla, id) : ipcRenderer.invoke('online:runtime', 'db/getById', { tabla, id }),

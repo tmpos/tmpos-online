@@ -28,9 +28,25 @@ export const useAuthStore = defineStore('auth', () => {
     return `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
   }
 
+  function effectiveUserRole(candidate) {
+    const level = String(candidate?.nivel_seguridad || '').trim().toLowerCase()
+    const role = String(candidate?.rol || '').trim().toLowerCase()
+    const levelRoles = {
+      administrador: 'administrador', admin: 'administrador', usuario: 'vendedor', vendedor: 'vendedor',
+      cajero: 'cajero', soporte: 'soporte', taller: 'taller', gerente: 'gerente',
+    }
+    return levelRoles[level] || levelRoles[role] || role
+  }
+
+  async function synchronizeUserRole(candidate) {
+    const effectiveRole = effectiveUserRole(candidate)
+    if (!effectiveRole || String(candidate?.rol || '').trim().toLowerCase() === effectiveRole) return
+    candidate.rol = effectiveRole
+    if (Number(candidate.id || 0) > 0) await window.db.update('usuarios', candidate.id, { rol: effectiveRole })
+  }
+
   function isSupportUser(candidate) {
-    return candidate?.rol?.toLowerCase() === 'soporte' ||
-      candidate?.nivel_seguridad?.toLowerCase() === 'soporte'
+    return effectiveUserRole(candidate) === 'soporte'
   }
 
   function isActiveUser(candidate) {
@@ -57,14 +73,13 @@ export const useAuthStore = defineStore('auth', () => {
     return created.data
   }
 
-  const nivel = computed(() => String(user.value?.nivel_seguridad || '').trim().toLowerCase())
-  const rol = computed(() => String(user.value?.rol || '').trim().toLowerCase())
-  const isAdmin = computed(() => ['administrador', 'admin'].includes(rol.value) || ['administrador', 'admin'].includes(nivel.value))
-  const isGerente = computed(() => rol.value === 'gerente' || nivel.value === 'gerente')
-  const isVendedor = computed(() => rol.value === 'vendedor' || nivel.value === 'vendedor' || nivel.value === 'usuario')
-  const isCajero = computed(() => rol.value === 'cajero' || nivel.value === 'cajero')
-  const isTaller = computed(() => rol.value === 'taller' || nivel.value === 'taller')
-  const isSoporte = computed(() => rol.value === 'soporte' || nivel.value === 'soporte')
+  const effectiveRole = computed(() => effectiveUserRole(user.value))
+  const isAdmin = computed(() => effectiveRole.value === 'administrador')
+  const isGerente = computed(() => effectiveRole.value === 'gerente')
+  const isVendedor = computed(() => effectiveRole.value === 'vendedor')
+  const isCajero = computed(() => effectiveRole.value === 'cajero')
+  const isTaller = computed(() => effectiveRole.value === 'taller')
+  const isSoporte = computed(() => effectiveRole.value === 'soporte')
 
   async function login(usuario, password) {
     loading.value = true
@@ -104,11 +119,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (!found) {
         throw new Error('Usuario o contrasena incorrectos')
       }
-      if (!found.rol && found.nivel_seguridad) {
-        const rolMap = { Administrador: 'administrador', Usuario: 'vendedor', Vendedor: 'vendedor', Cajero: 'cajero', Soporte: 'soporte', Taller: 'taller', Gerente: 'gerente' }
-        found.rol = rolMap[found.nivel_seguridad] || 'vendedor'
-        await window.db.update('usuarios', found.id, { rol: found.rol })
-      }
+      await synchronizeUserRole(found)
       user.value = found
       isAuthenticated.value = true
       localStorage.setItem('mr_user_id', found.id)
@@ -151,11 +162,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (!found) {
         throw new Error('PIN incorrecto')
       }
-      if (!found.rol && found.nivel_seguridad) {
-        const rolMap = { Administrador: 'administrador', Usuario: 'vendedor', Vendedor: 'vendedor', Cajero: 'cajero', Soporte: 'soporte', Taller: 'taller', Gerente: 'gerente' }
-        found.rol = rolMap[found.nivel_seguridad] || 'vendedor'
-        await window.db.update('usuarios', found.id, { rol: found.rol })
-      }
+      await synchronizeUserRole(found)
       user.value = found
       isAuthenticated.value = true
       localStorage.setItem('mr_user_id', found.id)
@@ -188,10 +195,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await window.db.getById('usuarios', parseInt(userId))
       if (res.success && res.data && isActiveUser(res.data)) {
-        if (!res.data.rol && res.data.nivel_seguridad) {
-          const rolMap = { Administrador: 'administrador', Usuario: 'vendedor', Vendedor: 'vendedor', Cajero: 'cajero', Soporte: 'soporte', Taller: 'taller', Gerente: 'gerente' }
-          res.data.rol = rolMap[res.data.nivel_seguridad] || 'vendedor'
-        }
+        await synchronizeUserRole(res.data)
         user.value = res.data
         isAuthenticated.value = true
       } else if (parseInt(userId) === 0) {
